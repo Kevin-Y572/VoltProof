@@ -182,8 +182,12 @@ SKIDL_SYSTEM = """\
    print("OUT_NODES: v(out1k) v(out3k)")    # write 的信号，必须真实存在
    print("EXTRA: .model mynpn NPN(beta=100)")  # 需要的 .model/.ic 等原生指令，没有就省略此行
 6. 振荡器类电路用不对称元件值或 EXTRA 里加 .ic 打破对称静态点，否则不起振。
-7. 运放可用 E 原语自建（注意限幅防爆），或用电阻网络等效。
-8. 每个网络至少连接两个元件引脚（悬空网络会 singular matrix）。
+7. 运放一律用 E 原语按下面标准封装（引脚名固定，增益 1e5 近似理想）：
+   e1 = E(gain=100000)
+   反相端 net_m += ..., e1["in"]；同相端 e1["ip"] 接 gnd（或参考）；
+   输出 net_out += e1["op"]；e1["on"] 接 gnd。四个引脚必须全部连接。
+8. 每个网络至少连接两个元件引脚（悬空网络会 singular matrix）；定义了没用
+   的 Net 要删掉。
 """
 
 SKIDL_EXAMPLE = """\
