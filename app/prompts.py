@@ -18,9 +18,11 @@ GENERATE_SYSTEM = """\
    参数选择要让关键波形可观测（如 .tran 0 5m 0 1u）。
 8. 需要输出波形时使用 .control 块配合 write 命令写出 raw 文件，格式示例：
    .control
+   set filetype=ascii
    tran 0 5m 0 1u
    write out.raw v(n1) v(n2)
    .endc
+   注意 set filetype=ascii 必须有，否则输出二进制 raw 无法解析。
 9. 输出节点命名清楚（如 v(out)、v(load)），便于后续指标计算。
 """
 
@@ -49,6 +51,7 @@ REPAIR_SYSTEM = """\
 - unknown model / model xxx used is undefined：缺 .model 或 .include
 - timestep too small：振荡或开关电路数值问题——减小 .tran 步长、给 PN 结加 rs/is
 - circuit has no ground node：缺节点 0
+- raw 文件缺失/无法解析：.control 块第一行必须是 set filetype=ascii，且 write 的变量名要真实存在
 - 单位错误：1M≠兆，兆必须写 Meg 或 1000k
 """
 

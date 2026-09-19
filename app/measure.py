@@ -18,15 +18,20 @@ class Traces:
 
 
 def load_traces(raw_path: str | Path) -> Traces:
-    import spyci  # 延迟导入，W1 时验证 API 名称（load_raw 返回 dict）
+    # spyci 1.0.2 兼容垫片：其内部使用 np.complex_（NumPy 2.0 已移除）
+    if not hasattr(np, "complex_"):
+        np.complex_ = np.complex128
+    # spyci 1.0.2：函数在 spyci.spyci 子模块，返回结构化数组 + vars 元数据
+    from spyci.spyci import load_raw
 
-    data = spyci.load_raw(str(raw_path))
+    data = load_raw(str(raw_path))
+    values = data["values"]
+    time_axis: np.ndarray | None = None
     signals: dict[str, np.ndarray] = {}
-    time_axis = None
-    for name, values in data.items():
-        arr = np.asarray(values, dtype=float)
-        key = name.lower()
-        if key in ("time", "frequency", "freq", "sweep"):
+    for var in data["vars"]:
+        name = var["name"]
+        arr = np.abs(np.asarray(values[name], dtype=complex))  # AC 复数取模，tran 虚部为 0
+        if var["type"] in ("time", "frequency") or name.lower() in ("time", "freq", "frequency"):
             time_axis = arr
         else:
             signals[name] = arr
@@ -65,6 +70,3 @@ def extract_metrics(traces: Traces) -> dict[str, float]:
             m["phase_diff_deg"] = clean(-lag * dt * 360.0 * 1e0) if dt else 0.0
 
     return m
-
-
-# TODO(W1): 单元测试——用固定 RC 电路的 raw 文件验证增益/时间轴解析正确。
