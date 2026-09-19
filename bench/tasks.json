@@ -1,0 +1,55 @@
+{
+  "description": "Phase 0 基准任务集：10 个典型模拟电路。验收=全部走通闭环且重试后通过率>=90%。",
+  "tasks": [
+    {
+      "id": "voltage-divider",
+      "prompt": "设计一个电阻分压电路：12V 输入分出 5V，负载电流很小，仿真验证输出电压",
+      "expect": { "analysis": "op", "metric": "输出节点电压 ≈ 5V" }
+    },
+    {
+      "id": "rc-charging",
+      "prompt": "设计一个 RC 一阶充电电路：1kΩ 电阻 + 1µF 电容，5V 阶跃激励，观察电容电压充电过程",
+      "expect": { "analysis": "tran", "metric": "时间常数 ≈ 1ms，终值 5V" }
+    },
+    {
+      "id": "rc-lowpass",
+      "prompt": "设计一个截止频率 1kHz 的 RC 低通滤波器，做交流扫描验证 -3dB 点",
+      "expect": { "analysis": "ac", "metric": "-3dB 截止频率 ≈ 1kHz" }
+    },
+    {
+      "id": "inverting-amp",
+      "prompt": "用理想运算放大器设计一个增益 -10 倍的反相放大器，输入 0.1V 正弦信号，仿真验证输出幅度",
+      "expect": { "analysis": "tran", "metric": "输出峰峰值 ≈ 2×1.0V，反相" }
+    },
+    {
+      "id": "noninverting-amp",
+      "prompt": "用理想运放设计增益 11 倍的同相放大器（反馈网络 Rf=10k, Rg=1k），仿真验证",
+      "expect": { "analysis": "tran", "metric": "增益 ≈ 11" }
+    },
+    {
+      "id": "ce-amplifier",
+      "prompt": "设计一个共射放大电路：NPN(2N2222)，VCC=12V，静态集电极电流约 1mA，电压增益大于 50，需要偏置电路和耦合电容，仿真验证静态工作点和增益",
+      "expect": { "analysis": "tran+op", "metric": "IC ≈ 1mA，增益 > 50（本任务最难，允许重试多次）" }
+    },
+    {
+      "id": "rectifier-filter",
+      "prompt": "设计桥式整流+电容滤波电路：220V/50Hz 经变压器降压到 12V 有效值，滤波电容让纹波小于 1V，负载 100Ω，仿真观察整流滤波前后波形",
+      "expect": { "analysis": "tran", "metric": "输出直流 ≈ 15V 峰值附近，纹波 < 1V" }
+    },
+    {
+      "id": "zener-regulator",
+      "prompt": "设计稳压二极管稳压电路：输入 15V，稳压到 5.1V，负载 500Ω，限流电阻取合适值，仿真验证输出电压",
+      "expect": { "analysis": "op", "metric": "输出 ≈ 5.1V，限流电阻功耗合理" }
+    },
+    {
+      "id": "square-osc",
+      "prompt": "用 555 定时器（可用行为级模型或子电路）设计一个 1kHz 方波发生器，仿真输出方波",
+      "expect": { "analysis": "tran", "metric": "频率 ≈ 1kHz（555 模型可得性是风险点，失败则换运放比较器方案）" }
+    },
+    {
+      "id": "sensor-conditioning",
+      "prompt": "传感器调理电路：0-10mV 缓变信号放大到 0-5V（增益 500），两级放大，加一阶低通抗干扰（截止 100Hz），仿真验证总增益和带宽",
+      "expect": { "analysis": "tran+ac", "metric": "总增益 ≈ 500，-3dB ≈ 100Hz" }
+    }
+  ]
+}

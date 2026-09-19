@@ -1,0 +1,7 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+openai>=1.40
+spyci>=0.1
+matplotlib>=3.8
+numpy>=1.26
+schemdraw>=0.19

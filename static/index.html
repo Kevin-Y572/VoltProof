@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CircuitPilot —— 电路仿真 Copilot</title>
+<style>
+  :root { --bg:#0f1117; --card:#181b24; --line:#2a2f3d; --text:#e6e8ee; --dim:#9aa1b2; --acc:#4f8cff; --ok:#3fb96f; --warn:#e6a23c; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--text); font:14px/1.6 "Segoe UI",system-ui,-apple-system,"Microsoft YaHei",sans-serif; height:100vh; display:flex; flex-direction:column; }
+  header { padding:12px 20px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:10px; }
+  header h1 { font-size:17px; } header span { color:var(--dim); font-size:12px; }
+  #chat { flex:1; overflow-y:auto; padding:20px; display:flex; flex-direction:column; gap:14px; }
+  .msg { max-width:860px; width:100%; margin:0 auto; }
+  .msg.user .bubble { background:#24304a; border-radius:12px; padding:10px 14px; display:inline-block; }
+  .evidence { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; }
+  .verdict { font-weight:600; margin-bottom:8px; }
+  .verdict.ok { color:var(--ok); } .verdict.fail { color:var(--warn); }
+  .metrics { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0; }
+  .metric { background:#10131b; border:1px solid var(--line); border-radius:8px; padding:6px 12px; font-size:13px; }
+  .metric b { color:var(--acc); font-family:Consolas,monospace; }
+  .wave { max-width:100%; border:1px solid var(--line); border-radius:8px; margin:8px 0; }
+  details { margin-top:8px; border-top:1px dashed var(--line); padding-top:8px; }
+  summary { cursor:pointer; color:var(--dim); font-size:12.5px; }
+  pre { background:#10131b; border:1px solid var(--line); border-radius:8px; padding:10px; overflow-x:auto; font:12px/1.5 Consolas,monospace; margin-top:8px; color:#c8d2e8; }
+  .interp { color:var(--text); margin-top:8px; }
+  .badge { display:inline-block; font-size:11px; padding:1px 8px; border-radius:10px; background:#1d2b45; color:var(--acc); margin-right:6px; }
+  footer { border-top:1px solid var(--line); padding:14px 20px; display:flex; gap:10px; }
+  #input { flex:1; background:var(--card); border:1px solid var(--line); border-radius:10px; color:var(--text); padding:10px 14px; font-size:14px; outline:none; resize:none; }
+  #send { background:var(--acc); border:none; color:#fff; border-radius:10px; padding:0 22px; cursor:pointer; font-size:14px; }
+  #send:disabled { opacity:.5; cursor:wait; }
+  .hint { max-width:860px; margin:0 auto; color:var(--dim); font-size:12.5px; }
+  .hint code { background:#1d2b45; padding:1px 6px; border-radius:4px; cursor:pointer; color:var(--acc); }
+</style>
+</head>
+<body>
+<header>
+  <h1>CircuitPilot</h1>
+  <span>每一份回答都附带仿真证据 · ngspice 验证</span>
+</header>
+
+<div id="chat">
+  <div class="hint">
+    试试：
+    <code onclick="fill('设计一个截止频率1kHz的RC低通滤波器')">RC 低通滤波器</code>
+    <code onclick="fill('用理想运放设计一个增益-10倍的反相放大器，仿真验证')">反相放大器</code>
+    <code onclick="fill('设计桥式整流+电容滤波电路，220V/50Hz降压到12V，纹波<1V')">整流滤波</code>
+  </div>
+</div>
+
+<footer>
+  <textarea id="input" rows="1" placeholder="用自然语言描述电路需求…（Enter 发送）"></textarea>
+  <button id="send">发送</button>
+</footer>
+
+<script>
+const session_id = crypto.randomUUID().slice(0, 12);
+
+function fill(text) { input.value = text; input.focus(); }
+
+async function send() {
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = ""; send.disabled = true;
+  addMsg('user', text);
+  const holder = addMsg('assistant', '<span style="color:var(--dim)">仿真验证中…（生成网表 → ngspice 执行 → 指标计算）</span>');
+  try {
+    const r = await fetch('/chat', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({session_id, message: text})
+    });
+    const d = await r.json();
+    if (d.error) holder.innerHTML = `<div class="evidence"><div class="verdict fail">出错了</div>${d.error}</div>`;
+    else holder.innerHTML = renderEvidence(d);
+  } catch (e) {
+    holder.innerHTML = `<div class="evidence">请求失败：${e}</div>`;
+  }
+  send.disabled = false; input.focus();
+}
+
+function addMsg(role, html) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  if (role === 'user') div.innerHTML = `<div class="bubble">${escapeHtml(html)}</div>`;
+  else div.innerHTML = html;
+  chat.appendChild(div); chat.scrollTop = chat.scrollHeight;
+  return div;
+}
+
+function renderEvidence(d) {
+  const metrics = Object.entries(d.metrics || {}).map(([k, v]) => `<div class="metric">${k} <b>${v}</b></div>`).join('');
+  const wave = d.waveform_b64 ? `<img class="wave" src="data:image/png;base64,${d.waveform_b64}" alt="仿真波形">` : '';
+  const retries = (d.retry_log || []).filter(r => r.stage !== 'generate');
+  const retryHtml = retries.length
+    ? `<details><summary>仿真在环日志（${retries.length} 次自动修复）</summary><pre>${escapeHtml(JSON.stringify(retries, null, 1))}</pre></details>` : '';
+  return `<div class="evidence">
+    <div class="verdict ${d.ok ? 'ok' : 'fail'}">${d.ok ? '✅ 仿真验证通过' : '⚠️ 自动修复后仍未通过'}</div>
+    <div><span class="badge">实测指标</span><span class="badge">${d.elapsed}s</span></div>
+    <div class="metrics">${metrics || '<span style="color:var(--dim)">无</span>'}</div>
+    ${wave}
+    <div class="interp">${escapeHtml(d.interpretation || '')}</div>
+    <details><summary>网表（ngspice）</summary><pre>${escapeHtml(d.netlist)}</pre></details>
+    ${retryHtml}
+  </div>`;
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+const input = document.getElementById('input'), send_ = document.getElementById('send'), chat = document.getElementById('chat');
+input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+send_.addEventListener('click', send);
+</script>
+</body>
+</html>
