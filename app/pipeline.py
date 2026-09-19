@@ -79,12 +79,23 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
 
         # ---- 仿真 ----
         sim = run_netlist(netlist, workdir=OUT_DIR)
-        if not sim.ok or sim.raw_path is None:
+        if not sim.ok:
             ev.retry_log.append({"round": rnd, "stage": "simulate",
                                  "problems": [sim.error_snippet or "仿真失败且无报错文本"]})
             if rnd == max_retries:
                 break
             netlist = _repair(netlist, [sim.error_snippet])
+            continue
+        if sim.raw_path is None:
+            # 仿真本身通过但没写出波形数据——报错必须说清楚，否则 LLM 会盲改电路
+            ev.retry_log.append({"round": rnd, "stage": "simulate", "problems": [
+                "仿真通过但没有产出波形数据：网表缺少 write。请在 .control 块中"
+                "添加 set filetype=ascii 和 write out.raw v(输出节点)，其余部分保持不变"]})
+            if rnd == max_retries:
+                break
+            netlist = _repair(netlist, [
+                "仿真通过但没有产出波形数据：网表缺少 write。请在 .control 块中"
+                "添加 set filetype=ascii 和 write out.raw v(输出节点)，其余部分保持不变"])
             continue
 
         # ---- 成功：解析、测指标、出图、解读 ----
@@ -116,6 +127,7 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
         break
 
     ev.elapsed = time.monotonic() - t0
+    ev.netlist = ev.netlist or netlist  # 失败时也保留最后版本，便于诊断
     return ev
 
 

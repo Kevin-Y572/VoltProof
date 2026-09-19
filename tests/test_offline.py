@@ -158,6 +158,12 @@ def main() -> int:
         c4 = checks.run_checks("V1 in 0 DC 5\nQ1 c b e mynpn\nRc vcc c 1k\n.model npn1 npn\n.tran 1u 1m\n")
         check("检查器: 缺模型报错", any("模型" in e for e in c4.errors), str(c4.errors))
 
+        # 2N2222 等数字开头型号是合法模型名，不能误报（曾导致 ce-amplifier 修不掉）
+        c4b = checks.run_checks(
+            "V1 in 0 DC 5\nRc in 2 10k\nRb1 in 3 100k\nRb2 3 0 20k\n"
+            "Q1 2 3 4 2N2222\nRe 4 0 100\n.model 2N2222 NPN\n.tran 1u 1m\n")
+        check("检查器: 2N2222 模型名零误报", c4b.ok, str(c4b.errors))
+
         c5 = checks.run_checks(RC_NETLIST)
         check("检查器: 好网表零误报", c5.ok, str(c5.errors))
 

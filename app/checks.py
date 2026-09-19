@@ -57,6 +57,8 @@ def parse_nodes(line: str) -> list[str]:
         return []
     name = tokens[0]
     kind = name[0].upper()
+    if kind == "K":
+        return []  # 互感耦合行（K1 Lp Ls 0.99）：引用的是电感名，不是节点
     if kind in "VCLIFH":
         return tokens[1:3]
     if kind == "Q":
@@ -84,14 +86,15 @@ def value_tokens(line: str) -> list[str]:
 
 
 def _model_ref(line: str) -> str | None:
-    """Q/D/M 元件引用的模型名；未写返回 None。取端子后最后一个字母开头的 token
-    （跳过面积等纯数字参数）。"""
+    """Q/D/M 元件引用的模型名；未写返回 None。取端子后最后一个非纯数值 token
+    （跳过面积等数字参数）。注意 2N2222/2N3904 等常见型号以数字开头，
+    不能用 isalpha 判定。"""
     tokens = line.split()
     kind = tokens[0][0].upper()
     min_terms = {"D": 3, "Q": 4, "M": 5}[kind]
     rest = tokens[min_terms:]
-    alpha = [t for t in rest if t[0].isalpha()]
-    return alpha[-1] if alpha else None
+    cands = [t for t in rest if not re.fullmatch(r"[-+]?\d+(\.\d+)?([eE][-+]?\d+)?", t)]
+    return cands[-1] if cands else None
 
 
 def run_checks(netlist_text: str) -> CheckResult:

@@ -14,12 +14,13 @@ GENERATE_SYSTEM = """\
 4. 每个元件一行：元件名首字母标识类型（R/C/L/V/I/Q/D/M...），如 R1 in 0 1k。
 5. 数值单位：ngspice 不区分 1M(兆) 与 1m(毫)——都按毫处理！兆欧写 1000k 或 1e6，兆写 Meg。
 6. 半导体（Q/D/M）必须包含 .model 定义或 .include，否则仿真会失败。
-7. 分析指令至少一条：.op（直流工作点）/ .tran（瞬态）/ .ac（频扫），
-   参数选择要让关键波形可观测（如 .tran 0 5m 0 1u）。
-8. 需要输出波形时使用 .control 块配合 write 命令写出 raw 文件，格式示例：
+7. 分析指令至少一条：.op（直流工作点）/ .tran（瞬态）/ .ac（频扫）。
+   .tran 格式：.tran 步长 总时长，如 .tran 10u 5m（步长 10µs、总 5ms）。
+   第一个参数是步长，必须大于 0！参数要让关键波形可观测。
+8. 展示分析结果一律使用 .control 块配合 write 命令写出 raw 文件（不要用 print），格式示例：
    .control
    set filetype=ascii
-   tran 0 5m 0 1u
+   tran 10u 5m
    write out.raw v(n1) v(n2)
    .endc
    注意 set filetype=ascii 必须有，否则输出二进制 raw 无法解析。
@@ -49,7 +50,10 @@ REPAIR_SYSTEM = """\
 常见错误速查：
 - singular matrix / no DC path：某节点浮空或无对地直流通路——加大电阻接地或检查连线
 - unknown model / model xxx used is undefined：缺 .model 或 .include
-- timestep too small：振荡或开关电路数值问题——减小 .tran 步长、给 PN 结加 rs/is
+- timestep too small：振荡或开关电路数值问题——减小 .tran 步长、给 PN 结加 rs/is；
+  若同一子电路/行为模型反复收敛失败，果断更换电路拓扑
+  （例如 555 定时器行为模型不收敛时，改用运放比较器 + RC 实现同样的方波）
+- TSTEP is invalid：.tran 第一个参数（步长）为 0——步长必须大于 0
 - circuit has no ground node：缺节点 0
 - raw 文件缺失/无法解析：.control 块第一行必须是 set filetype=ascii，且 write 的变量名要真实存在
 - 单位错误：1M≠兆，兆必须写 Meg 或 1000k

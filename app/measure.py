@@ -24,17 +24,76 @@ def load_traces(raw_path: str | Path) -> Traces:
     # spyci 1.0.2：函数在 spyci.spyci 子模块，返回结构化数组 + vars 元数据
     from spyci.spyci import load_raw
 
-    data = load_raw(str(raw_path))
-    values = data["values"]
-    time_axis: np.ndarray | None = None
+    path = Path(raw_path)
+    try:
+        data = load_raw(str(path))
+        vars_meta, values = data["vars"], data["values"]
+
+        time_axis: np.ndarray | None = None
+        signals: dict[str, np.ndarray] = {}
+        for var in vars_meta:
+            name = var["name"]
+            arr = np.abs(np.asarray(values[name], dtype=complex))  # AC 复数取模，tran 虚部为 0
+            if var["type"] in ("time", "frequency") or name.lower() in ("time", "freq", "frequency"):
+                time_axis = arr
+            else:
+                signals[name] = arr
+        return Traces(time=time_axis, signals=signals)
+    except Exception:
+        # spyci 解析不了的边界：op 分析后 write 会产出重复变量名（v(in) 出现两次），
+        # spyci 构造结构化数组时直接抛错——用内置简易解析器兜底（重名列去重）
+        return _fallback_parse(path)
+
+
+def _fallback_parse(path: Path) -> Traces:
+    """极简 ASCII raw 解析：Variables 段收集变量名（重名后列覆盖），Values 段
+    按行号切点。只覆盖 ngspice write 产生的标准格式。"""
+    var_names: list[str] = []
+    var_types: dict[str, str] = {}
+    section: str | None = None
+    nums: list[complex] = []
+    point_count = 0
+    for ln in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        s = ln.strip()
+        if s == "Variables:":
+            section = "vars"
+            continue
+        if s == "Values:":
+            section = "vals"
+            continue
+        if section == "vars":
+            parts = s.split()
+            if len(parts) >= 3 and parts[0].isdigit():
+                var_names.append(parts[1])
+                var_types[parts[1]] = parts[2]
+        elif section == "vals" and s:
+            parts = s.split()
+            if parts[0] == str(point_count):  # 行首的点索引，跳过
+                parts = parts[1:]
+                point_count += 1
+            for tok in parts:
+                if "," in tok:  # complex "re,im"
+                    re_s, im_s = tok.split(",", 1)
+                    nums.append(complex(float(re_s), float(im_s)))
+                else:
+                    try:
+                        nums.append(complex(float(tok), 0.0))
+                    except ValueError:
+                        pass
+    nvars = max(len(var_names), 1)
+    npoints = len(nums) // nvars
+    cols: dict[str, np.ndarray] = {}
+    for j, name in enumerate(var_names):
+        cols[name] = np.asarray([nums[i * nvars + j] for i in range(npoints)], dtype=complex)
+
+    time_axis = None
     signals: dict[str, np.ndarray] = {}
-    for var in data["vars"]:
-        name = var["name"]
-        arr = np.abs(np.asarray(values[name], dtype=complex))  # AC 复数取模，tran 虚部为 0
-        if var["type"] in ("time", "frequency") or name.lower() in ("time", "freq", "frequency"):
-            time_axis = arr
+    for name, arr in cols.items():
+        mag = np.abs(arr)
+        if var_types.get(name) in ("time", "frequency") or name.lower() in ("time", "freq", "frequency"):
+            time_axis = mag
         else:
-            signals[name] = arr
+            signals[name] = mag
     return Traces(time=time_axis, signals=signals)
 
 
