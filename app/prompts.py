@@ -58,7 +58,11 @@ REPAIR_SYSTEM = """\
 - timestep too small：振荡或开关电路数值问题——减小 .tran 步长、给 PN 结加 rs/is；
   若同一子电路/行为模型反复收敛失败，果断更换电路拓扑
   （例如 555 定时器行为模型不收敛时，改用运放比较器 + RC 实现同样的方波）
+- 仿真超时（30s 无结果）：数值收敛卡死——理想受控源(E/F/G/H 增益 1e5+)串 RC
+  一阶限幅、高 Q 值 LC 并联电阻降 Q、减小仿真时长；仍不行就简化拓扑
 - TSTEP is invalid：.tran 第一个参数（步长）为 0——步长必须大于 0
+- incomplete or empty netlist：网表被截断或结构破坏（.subckt 无 .ends、
+  续行悬空）——重新输出完整网表，确保 .end 结尾
 - circuit has no ground node：缺节点 0
 - raw 文件缺失/无法解析：.control 块第一行必须是 set filetype=ascii，且 write 的变量名要真实存在
 - 单位错误：1M≠兆，兆必须写 Meg 或 1000k

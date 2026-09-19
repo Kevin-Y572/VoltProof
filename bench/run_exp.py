@@ -36,8 +36,9 @@ def main() -> None:
         print(f"prompt: {t['prompt']}")
         t0 = time.monotonic()
         try:
+            # 综合实验电路（振荡+分频+滤波链）比 bench 任务重：放宽重试预算
             ev = run_pipeline(t["prompt"], previous_netlist=prev_netlist,
-                              validators=get_validators(t["id"]))
+                              max_retries=5, validators=get_validators(t["id"]))
         except Exception as e:
             print(f"[{t['id']}] 管道异常: {e}")
             summary.append({"id": t["id"], "ok": False, "error": str(e),

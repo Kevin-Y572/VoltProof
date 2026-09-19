@@ -17,7 +17,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _NGSPICE = os.environ.get("CIRCUITPILOT_NGSPICE", "ngspice")
-_TIMEOUT = 60  # 秒，路线图要求端到端 ≤60s，仿真本身留 60s 上限
+# 超时可覆盖；默认 30s：正常的 tran 远快于此，收敛死循环 30s 也救不回来，
+# 卡满 60s 只是烧掉重试预算（综合实验曾一电路拖满 4×60s）
+_TIMEOUT = int(os.environ.get("CIRCUITPILOT_SIM_TIMEOUT", "30"))
 
 # 日志/stdout 里出现即判失败的标记（ngspice 手册 + 实测归纳）
 _FATAL_MARKERS = (
