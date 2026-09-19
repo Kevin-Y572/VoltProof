@@ -52,9 +52,12 @@ def chat(system: str, user: str, temperature: float = 0.2) -> str:
             msg = resp.choices[0].message
             content = msg.content or ""
             if not content.strip():
-                # 推理型模型（如 deepseek-flash）超长思考后 content 偶发为空，
-                # 思考文本里通常已含代码块——回落 reasoning_content 由提取器挖掘
-                content = getattr(msg, "reasoning_content", "") or ""
+                # 推理型模型（如 deepseek-flash）超长思考后 content 偶发为空。
+                # 只有思考文本里确实产出了代码块才回落；纯散文思考不能当网表
+                # （曾把中文说明片段喂进静态检查器产生荒诞报错）。
+                rc = getattr(msg, "reasoning_content", "") or ""
+                if "```" in rc:
+                    content = rc
             return content
         except openai.OpenAIError as e:
             last = e

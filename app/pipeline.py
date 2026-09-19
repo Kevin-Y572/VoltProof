@@ -83,6 +83,11 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
         netlist = llm.extract_code_block(
             llm.chat(prompts.GENERATE_SYSTEM, prompts.generate_user(request, previous_netlist))
         )
+        if not netlist:
+            # 推理型模型偶发空响应——重生成一次，别让空网表直接终止管线
+            netlist = llm.extract_code_block(
+                llm.chat(prompts.GENERATE_SYSTEM, prompts.generate_user(request, previous_netlist))
+            )
         ev.retry_log.append({"round": 0, "stage": "generate", "problems": []})
 
     for rnd in range(max_retries + 1):
