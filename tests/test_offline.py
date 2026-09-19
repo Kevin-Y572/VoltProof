@@ -75,6 +75,32 @@ write out.raw v(out)
 .end
 """
 
+SIN_NETLIST = """\
+* 1kHz sine through divider (symbol/frequency regression)
+V1 in 0 SIN(0 2.5 1k)
+R1 in out 1k
+R2 out 0 1k
+.control
+set filetype=ascii
+tran 5u 10m
+write out.raw v(out)
+.endc
+.end
+"""
+
+DUP_NETLIST = """\
+* op with duplicate v(in) -> forces fallback parser; negative DC
+V1 in 0 DC -5
+R1 in out 1k
+R2 out 0 1k
+.control
+set filetype=ascii
+op
+write out.raw v(in) v(out)
+.endc
+.end
+"""
+
 FAILURES: list[str] = []
 
 
@@ -144,6 +170,37 @@ def main() -> int:
         renamed = run_netlist(AC_NETLIST.replace("out.raw", "my_lpf.raw"), workdir=tmp / "renamed")
         check("自定义 raw 名被发现", renamed.ok and renamed.raw_path is not None
               and renamed.raw_path.name == "my_lpf.raw", str(renamed.raw_path))
+
+        # ---- 3e. 瞬态符号回归：负半周不许被翻正（np.abs 老 bug）----
+        sim_sin = run_netlist(SIN_NETLIST, workdir=tmp / "sin")
+        check("正弦仿真通过", sim_sin.ok)
+        if sim_sin.raw_path:
+            tr_sin = measure.load_traces(sim_sin.raw_path)
+            vout = tr_sin.signals.get("v(out)")
+            check("负半周保留（min<0）", vout is not None and float(np.min(vout)) < -1.0,
+                  f"min={None if vout is None else float(np.min(vout)):.3f}")
+            check("均值≈0（全波整流老 bug 会得到 0.8）",
+                  vout is not None and abs(float(np.mean(vout))) < 0.05,
+                  f"mean={None if vout is None else float(np.mean(vout)):.3f}")
+            check("vpp≈2.5V（分压一半）", vout is not None
+                  and abs(float(np.ptp(vout)) - 2.5) < 0.1,
+                  f"vpp={None if vout is None else float(np.ptp(vout)):.3f}")
+            m_sin = measure.extract_metrics(tr_sin)
+            check("主频实测≈1kHz（重采样+抛物线细化）",
+                  abs(m_sin.get("v(out)_freq_Hz", 0) - 1000) < 20,
+                  f"freq={m_sin.get('v(out)_freq_Hz')}")
+
+        # ---- 3f. fallback 解析器：重复变量触发降级 + 负直流符号 ----
+        sim_dup = run_netlist(DUP_NETLIST, workdir=tmp / "dup")
+        check("重复变量网表仿真通过", sim_dup.ok)
+        if sim_dup.raw_path:
+            tr_dup = measure.load_traces(sim_dup.raw_path)
+            check("降级原因已记录（不再静默）", tr_dup.warning is not None and "spyci" in tr_dup.warning,
+                  str(tr_dup.warning))
+            vd = tr_dup.signals.get("v(out)")
+            check("fallback 保留符号（-5V 分压≈-2.5V）",
+                  vd is not None and abs(float(vd[0]) + 2.5) < 0.05,
+                  f"v={None if vd is None else float(vd[0]):.3f}")
 
         # ---- 4. 静态检查四类规则 ----
         c1 = checks.run_checks("V1 in x0 DC 5\nR1 in out 1k\nC1 out x0 1u\n.tran 1u 1m\n")
