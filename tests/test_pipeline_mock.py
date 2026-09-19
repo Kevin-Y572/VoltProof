@@ -122,6 +122,34 @@ def main() -> int:
     check("会话: 第二轮携带上轮网表", "当前网表" in gen_user2 and "V1 in 0" in gen_user2, gen_user2[:100])
     check("会话: 历史两条", len(pipeline._SESSIONS["sess-test"]["history"]) == 2)
 
+    # ---- 4b. 验收环：指标不达标 → 差距回喂 → 调参重跑 ----
+    calls = {"n": 0}
+
+    def strict_validator(ev, tr):
+        calls["n"] += 1
+        if calls["n"] == 1:  # 第一轮：幅度不达标
+            return [{"name": "峰峰值≈2V", "ok": False, "detail": "实测 vpp=1.0V（目标 2V±15%）"}]
+        return [{"name": "峰峰值≈2V", "ok": True, "detail": "实测 vpp=2.0V"}]
+
+    tune_calls: list[str] = []
+
+    def fake_chat(system, user, temperature=0.2):
+        if "调参专家" in system:
+            tune_calls.append(user)
+            return GOOD.replace("AC 1", "AC 2")  # 调参后的网表
+        if "解读" in system:
+            return "验收环解读。"
+        return GOOD
+
+    with patch.object(llm, "chat", fake_chat):
+        ev = pipeline.run_pipeline("1kHz低通", validators=[strict_validator])
+    stages = [r["stage"] for r in ev.retry_log]
+    check("验收环: 记录 verify 轮", "verify" in stages, str(stages))
+    check("验收环: 调参提示词含差距详情",
+          any("实测 vpp=1.0V" in u for u in tune_calls), str(tune_calls)[:150])
+    check("验收环: 最终 checks 全过", ev.ok and all(c["ok"] for c in ev.checks))
+    check("验收环: Evidence 带验收明细", len(ev.checks) == 1 and ev.checks[0]["ok"])
+
     # ---- 5. FastAPI 接口 ----
     from fastapi.testclient import TestClient
     from app.main import app

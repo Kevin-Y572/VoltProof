@@ -15,11 +15,18 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING, Callable
 
 from . import checks, llm, measure, prompts
 from .ngspice_runner import run_netlist
 from .render_schematic import render_schematic
 from .render_wave import render_wave
+
+if TYPE_CHECKING:  # 只做类型标注，避免运行时循环依赖
+    from .measure import Traces
+
+# 验收器：从 Evidence + 波形数据计算结构化检查项 [{name, ok, detail}]
+Validator = Callable[["Evidence", "Traces | None"], list[dict]]
 
 MAX_RETRIES = 3
 OUT_DIR = Path(__file__).resolve().parent.parent / "out"
@@ -37,6 +44,7 @@ class Evidence:
     metrics: dict = field(default_factory=dict)
     interpretation: str = ""
     retry_log: list[dict] = field(default_factory=list)  # 每轮 {round, stage, problems}
+    checks: list[dict] = field(default_factory=list)      # 验收明细 [{name, ok, detail}]
     elapsed: float = 0.0
 
     def to_dict(self) -> dict:
@@ -49,6 +57,7 @@ class Evidence:
             "metrics": self.metrics,
             "interpretation": self.interpretation,
             "retry_log": self.retry_log,
+            "checks": self.checks,
             "elapsed": round(self.elapsed, 1),
         }
 
@@ -58,7 +67,8 @@ def _b64_png(png: Path) -> str:
 
 
 def run_pipeline(request: str, previous_netlist: str | None = None,
-                 max_retries: int = MAX_RETRIES) -> Evidence:
+                 max_retries: int = MAX_RETRIES,
+                 validators: list[Validator] | None = None) -> Evidence:
     ev = Evidence(request=request)
     t0 = time.monotonic()
 
@@ -98,15 +108,36 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
                 "添加 set filetype=ascii 和 write out.raw v(输出节点)，其余部分保持不变"])
             continue
 
-        # ---- 成功：解析、测指标、出图、解读 ----
+        # ---- 成功：解析、测指标、出图 ----
+        tr = None
         try:
             tr = measure.load_traces(sim.raw_path)
+            if tr.warning:
+                ev.retry_log.append({"round": rnd, "stage": "measure",
+                                     "problems": [tr.warning]})  # 非致命，留痕
             ev.metrics = measure.extract_metrics(tr)
             png = render_wave(tr, OUT_DIR / "wave.png", title=request[:40])
             ev.waveform_b64 = _b64_png(png)
         except Exception as e:  # 波形解析失败不致命，证据卡降级
             ev.retry_log.append({"round": rnd, "stage": "measure", "problems": [f"波形解析失败: {e}"]})
 
+        # ---- 验收环：实测指标 vs 需求（2026-09-19 综合实验教训：
+        # "仿真跑通"≠"实验达标"，差距必须回喂 LLM 调参重跑）----
+        if validators:
+            vchecks: list[dict] = []
+            for v in validators:
+                vchecks.extend(v(ev, tr))
+            ev.checks = vchecks
+            fails = [c for c in vchecks if not c.get("ok")]
+            if fails:
+                problems = [f"{c.get('name', '检查项')}未达标：{c.get('detail', '')}" for c in fails]
+                ev.retry_log.append({"round": rnd, "stage": "verify", "problems": problems})
+                if rnd == max_retries:
+                    break
+                netlist = _tune(request, netlist, problems)
+                continue
+
+        # ---- 全部通过：解读、电路图 ----
         ev.netlist = netlist
         ev.ok = True
         ev.interpretation = llm.chat(
@@ -134,6 +165,11 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
 def _repair(netlist: str, problems: list[str]) -> str:
     fixed = llm.chat(prompts.REPAIR_SYSTEM, prompts.repair_user(netlist, problems))
     return llm.extract_code_block(fixed)
+
+
+def _tune(request: str, netlist: str, problems: list[str]) -> str:
+    tuned = llm.chat(prompts.TUNE_SYSTEM, prompts.tune_user(request, netlist, problems))
+    return llm.extract_code_block(tuned)
 
 
 # ---------------------------------------------------------------------------
