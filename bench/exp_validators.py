@@ -94,8 +94,7 @@ def validator_exp1(ev, tr) -> list[dict]:
     res = []
     if s1 is None or s3 is None:
         missing = "1kHz" if s1 is None else "3kHz"
-        res.append(_ck(f"存在{missing}正弦输出", False,
-                       f"未找到基频 {missing} 的输出信号（write 需包含全部输出节点）"))
+        res.append(_not_found(f"存在{missing}正弦输出", tr))
         return res
     (n1, st1, (t1, y1)), (n3, st3, (t3, y3)) = s1, s3
     res.append(_ck("1kHz 频率", _near(st1.f0, 1000, 0.02), f"实测 {st1.f0:.1f}Hz"))
@@ -111,14 +110,32 @@ def validator_exp1(ev, tr) -> list[dict]:
 
 
 def _synth_output(outs):
-    """合成类实验（exp2-4）的输出信号：优先 sum/synth/tri 命名，否则取 vpp 最大的非激励信号。"""
+    """合成类实验（exp2-4）的输出信号：优先 vpp>0.2V 的 sum/synth/tri 命名信号
+    （0V 左右的'求和虚短点'也叫 sum，不能选），否则取 vpp 最大的非激励信号。"""
     if not outs:
         return None
     named = [(n, (t, y)) for n, (t, y) in outs.items()
-             if any(p in n.lower() for p in ("sum", "synth", "tri"))]
+             if any(p in n.lower() for p in ("sum", "synth", "tri"))
+             and float(np.ptp(y)) > 0.2]
     pool = named or list(outs.items())
     n, (t, y) = max(pool, key=lambda kv: float(np.ptp(kv[1][1])))
     return n, SignalStats(n, t, y), (t, y)
+
+
+def _signals_digest(traces) -> str:
+    """全部输出信号的一行摘要，附在验收差距里——LLM 能直接看出
+    write 写错了节点、输出幅度衰减、或电路没起振。"""
+    outs = _collect_outputs(traces)
+    parts = []
+    for name, (t, y) in outs.items():
+        st = SignalStats(name, t, y)
+        f = f"{st.f0:.0f}Hz" if st.f0 else "非周期/直流"
+        parts.append(f"{name}(vpp={st.vpp:.3g}V, {f})")
+    return "; ".join(parts) or "(无信号)"
+
+
+def _not_found(msg: str, tr) -> dict:
+    return _ck(msg, False, f"{msg}。当前 write 的输出信号实测：{_signals_digest(tr)}")
 
 
 def validator_exp2(ev, tr) -> list[dict]:
@@ -126,7 +143,7 @@ def validator_exp2(ev, tr) -> list[dict]:
     outs = _collect_outputs(tr)
     s = _synth_output(outs)
     if s is None or s[1].f0 is None:
-        return [_ck("存在合成输出（基波1kHz）", False, "未找到可分析的输出信号")]
+        return [_not_found("存在合成输出（基波1kHz）", tr)]
     n, st, (t, y) = s
     res = [_ck("合成输出基波1kHz", _near(st.f0, 1000, 0.06), f"实测 f0={st.f0:.1f}Hz")]
     a1 = st.harmonic(t, y, 1000)
@@ -143,7 +160,7 @@ def validator_exp3(ev, tr) -> list[dict]:
     outs = _collect_outputs(tr)
     s = _synth_output(outs)
     if s is None or s[1].f0 is None:
-        return [_ck("存在合成输出（基波1kHz）", False, "未找到可分析的输出信号")]
+        return [_not_found("存在合成输出（基波1kHz）", tr)]
     n, st, (t, y) = s
     res = [_ck("合成输出基波1kHz", _near(st.f0, 1000, 0.06), f"实测 f0={st.f0:.1f}Hz")]
     a1 = st.harmonic(t, y, 1000)
@@ -161,7 +178,7 @@ def validator_exp4(ev, tr) -> list[dict]:
     outs = _collect_outputs(tr)
     s = _synth_output(outs)
     if s is None or s[1].f0 is None:
-        return [_ck("存在合成输出（基波1kHz）", False, "未找到可分析的输出信号")]
+        return [_not_found("存在合成输出（基波1kHz）", tr)]
     n, st, (t, y) = s
     res = [_ck("合成输出基波1kHz", _near(st.f0, 1000, 0.06), f"实测 f0={st.f0:.1f}Hz")]
     a1 = st.harmonic(t, y, 1000)
