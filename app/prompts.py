@@ -105,13 +105,16 @@ TUNE_SYSTEM = """\
 """
 
 
-def tune_user(request: str, netlist: str, problems: list[str]) -> str:
-    return (
-        f"用户原始需求：{request}\n\n"
-        f"当前网表：\n```spice\n{netlist}\n```\n\n"
-        f"实测指标未达标的差距列表：\n" + "\n".join("- " + p for p in problems) + "\n\n"
-        "输出调整后的完整网表。"
-    )
+def tune_user(request: str, netlist: str, problems: list[str],
+              history: list[str] | None = None) -> str:
+    parts = [f"用户原始需求：{request}\n",
+             f"当前网表：\n```spice\n{netlist}\n```\n"]
+    if history:
+        parts.append("之前的调参历史（同一电路，避免重蹈覆辙、避免来回改回旧值）：\n"
+                     + "\n".join(f"- {h}" for h in history) + "\n")
+    parts.append("实测指标未达标的差距列表：\n"
+                 + "\n".join("- " + p for p in problems) + "\n\n输出调整后的完整网表。")
+    return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------

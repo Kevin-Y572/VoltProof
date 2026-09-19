@@ -90,6 +90,7 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
             )
         ev.retry_log.append({"round": 0, "stage": "generate", "problems": []})
 
+    tune_history: list[str] = []  # 验收环的调参历史（每轮实测记录，跨轮累积）
     for rnd in range(max_retries + 1):
         if not netlist:  # skidl 轨构建彻底失败（日志已在 _skidl_track 里）
             break
@@ -149,7 +150,9 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
                 ev.retry_log.append({"round": rnd, "stage": "verify", "problems": problems})
                 if rnd == max_retries:
                     break
-                netlist = _tune(request, netlist, problems)
+                # 调参历史让 LLM 看到之前每轮的实测结果，避免来回摆动不收敛
+                tune_history.append(f"第 {rnd + 1} 轮实测未达标：" + "；".join(problems)[:400])
+                netlist = _tune(request, netlist, problems, history=tune_history)
                 continue
 
         # ---- 全部通过：解读、电路图 ----
@@ -182,8 +185,9 @@ def _repair(netlist: str, problems: list[str]) -> str:
     return llm.extract_code_block(fixed)
 
 
-def _tune(request: str, netlist: str, problems: list[str]) -> str:
-    tuned = llm.chat(prompts.TUNE_SYSTEM, prompts.tune_user(request, netlist, problems))
+def _tune(request: str, netlist: str, problems: list[str],
+          history: list[str] | None = None) -> str:
+    tuned = llm.chat(prompts.TUNE_SYSTEM, prompts.tune_user(request, netlist, problems, history))
     return llm.extract_code_block(tuned)
 
 

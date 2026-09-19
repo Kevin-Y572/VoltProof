@@ -74,8 +74,12 @@ async function runBoth() {
     rStatus(`完成 · ${d.elapsed}s`);
     const metrics = Object.entries(d.metrics||{}).map(([k,v])=>`<span class="metric">${k} <b>${v}</b></span>`).join('');
     const wave = d.waveform_b64 ? `<img class="wave" src="data:image/png;base64,${d.waveform_b64}">` : '';
+    const checks = d.checks || [];
+    const checksHtml = checks.length
+      ? `<div style="margin-top:8px">${checks.map(c =>
+          `<span class="metric" style="${c.ok ? '' : 'border-color:var(--warn)'}">${c.ok ? '✅' : '❌'} ${escapeHtml(c.name)}</span>`).join('')}</div>` : '';
     document.getElementById('r-body').innerHTML =
-      `<div class="verdict ${d.ok?'ok':'fail'}">${d.ok?'✅ 仿真验证通过':'⚠️ 未通过'}</div>${metrics}${wave}` +
+      `<div class="verdict ${d.ok?'ok':'fail'}">${d.ok?'✅ 仿真验证通过':'⚠️ 未通过'}</div>${metrics}${wave}${checksHtml}` +
       `<pre>${escapeHtml(d.netlist)}</pre>`;
   } else { rStatus('失败'); }
   run.disabled = false;

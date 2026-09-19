@@ -129,6 +129,8 @@ def main() -> int:
         calls["n"] += 1
         if calls["n"] == 1:  # 第一轮：幅度不达标
             return [{"name": "峰峰值≈2V", "ok": False, "detail": "实测 vpp=1.0V（目标 2V±15%）"}]
+        if calls["n"] == 2:  # 第二轮：仍未达标（触发带历史的调参）
+            return [{"name": "峰峰值≈2V", "ok": False, "detail": "实测 vpp=1.4V（目标 2V±15%）"}]
         return [{"name": "峰峰值≈2V", "ok": True, "detail": "实测 vpp=2.0V"}]
 
     tune_calls: list[str] = []
@@ -147,6 +149,9 @@ def main() -> int:
     check("验收环: 记录 verify 轮", "verify" in stages, str(stages))
     check("验收环: 调参提示词含差距详情",
           any("实测 vpp=1.0V" in u for u in tune_calls), str(tune_calls)[:150])
+    check("验收环: 二次调参携带历史（避免来回摆动）",
+          len(tune_calls) >= 2 and "调参历史" in tune_calls[1] and "vpp=1.0V" in tune_calls[1],
+          tune_calls[1][:150] if len(tune_calls) > 1 else "(无第二次调参)")
     check("验收环: 最终 checks 全过", ev.ok and all(c["ok"] for c in ev.checks))
     check("验收环: Evidence 带验收明细", len(ev.checks) == 1 and ev.checks[0]["ok"])
 

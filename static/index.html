@@ -94,6 +94,11 @@ function renderEvidence(d) {
   const retries = (d.retry_log || []).filter(r => r.stage !== 'generate');
   const retryHtml = retries.length
     ? `<details><summary>仿真在环日志（${retries.length} 次自动修复）</summary><pre>${escapeHtml(JSON.stringify(retries, null, 1))}</pre></details>` : '';
+  const checks = d.checks || [];
+  const checksHtml = checks.length
+    ? `<details ${checks.some(c => !c.ok) ? 'open' : ''}><summary>验收明细（${checks.filter(c => c.ok).length}/${checks.length} 项通过）</summary>`
+      + checks.map(c => `<div class="metric" style="margin:4px 0;${c.ok ? '' : 'border-color:var(--warn)'}">${c.ok ? '✅' : '❌'} ${escapeHtml(c.name)} <span style="color:var(--dim)">· ${escapeHtml(c.detail || '')}</span></div>`).join('')
+      + '</details>' : '';
   return `<div class="evidence">
     <div class="verdict ${d.ok ? 'ok' : 'fail'}">${d.ok ? '✅ 仿真验证通过' : '⚠️ 自动修复后仍未通过'}</div>
     <div><span class="badge">实测指标</span><span class="badge">${d.elapsed}s</span></div>
@@ -101,6 +106,7 @@ function renderEvidence(d) {
     ${sch ? '<div><span class="badge">原理图（AI 生成）</span></div>' + sch : ''}
     ${wave}
     <div class="interp">${escapeHtml(d.interpretation || '')}</div>
+    ${checksHtml}
     <details><summary>网表（ngspice）</summary><pre>${escapeHtml(d.netlist)}</pre></details>
     ${retryHtml}
   </div>`;
