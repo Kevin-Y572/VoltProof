@@ -11,22 +11,49 @@
 ## 快速开始
 
 ```bash
-# 1. 安装 ngspice（Windows：官网下载安装包并加入 PATH，验证：ngspice --version）
+# 1. 安装 ngspice（Windows：SourceForge 下载 ngspice-XX_64.7z 解压，
+#    不需要进 PATH，设环境变量指向 ngspice.exe 即可）
+setx CIRCUITPILOT_NGSPICE "D:\Users\Lenovo\tools\ngspice-47\Spice64\bin\ngspice.exe"
+
 # 2. 安装依赖
 pip install -r requirements.txt
 
 # 3. 配置模型（OpenAI 兼容接口，默认指向智谱 GLM）
-set CIRCUITPILOT_API_KEY=你的key        # Windows CMD（Git Bash 用 export）
-set CIRCUITPILOT_MODEL=glm-4-flash      # 可选，默认即此
+setx CIRCUITPILOT_API_KEY 你的key         # Git Bash 会话内用 export（setx 对已开终端不生效）
+setx CIRCUITPILOT_MODEL glm-4-flash       # 可选，默认即此
+setx CIRCUITPILOT_BASE_URL https://open.bigmodel.cn/api/paas/v4/   # 可选
 
-# 4. 命令行跑通管道（W1 里程碑）
+# 4. 离线自检（不需要 API Key，验证仿真链路/检查器/重试循环/接口契约）
+python tests/test_offline.py
+python tests/test_pipeline_mock.py
+
+# 5. 命令行跑通管道（W1 里程碑，需要 API Key）
 python -m app.pipeline "设计一个截止频率1kHz的RC低通滤波器"
 
-# 5. 启动 Web 界面（W3 里程碑）
+# 6. 启动 Web 界面（W3 里程碑）
 uvicorn app.main:app --reload
 # 浏览器打开 http://127.0.0.1:8000
 # 同题对照演示页：http://127.0.0.1:8000/compare.html
 ```
+
+环境变量一览：
+
+| 变量 | 必填 | 说明 |
+|---|---|---|
+| `CIRCUITPILOT_API_KEY` | 是 | OpenAI 兼容 API Key（也接受 `OPENAI_API_KEY`） |
+| `CIRCUITPILOT_NGSPICE` | 是(Windows) | ngspice.exe 完整路径；已在 PATH 中可省略 |
+| `CIRCUITPILOT_BASE_URL` | 否 | 默认智谱开放平台 |
+| `CIRCUITPILOT_MODEL` | 否 | 默认 `glm-4-flash` |
+
+## 实测经验（Windows + ngspice-47，踩坑记录）
+
+- ngspice batch 模式（`-b`）仿真失败时**退出码仍是 0、stdout 为空**，报错只写进
+  `-o` 日志文件，且失败电路照样产出全零 raw——成败判定必须扫日志致命标记
+  （见 `ngspice_runner._FATAL_MARKERS`）。
+- spyci 1.0.2 只解析 **ASCII** raw：网表 `.control` 块第一行必须 `set filetype=ascii`；
+  其 `load_raw` 在 `spyci.spyci` 子模块，且用了 NumPy 2 已移除的 `np.complex_`（已垫片）。
+- LLM 生成的 schemdraw 代码在受限子进程执行（AST 白名单 + `-I` 隔离 + 超时），
+  失败自动降级为显示网表。
 
 ## 目录结构与开发周次对应
 
@@ -47,6 +74,9 @@ bench/
 static/
 ├── index.html         # 对话页（证据卡片）            W3
 └── compare.html       # 同题对照演示页               W4（差异化演示，优先级最高）
+tests/
+├── test_offline.py        # 离线冒烟：仿真/解析/波形/检查器（22 断言）
+└── test_pipeline_mock.py  # mock LLM：重试循环/会话/API/电路图沙箱（21 断言）
 ```
 
 ## Phase 0 验收标准（见路线图 2.5）

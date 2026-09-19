@@ -90,6 +90,7 @@ function addMsg(role, html) {
 function renderEvidence(d) {
   const metrics = Object.entries(d.metrics || {}).map(([k, v]) => `<div class="metric">${k} <b>${v}</b></div>`).join('');
   const wave = d.waveform_b64 ? `<img class="wave" src="data:image/png;base64,${d.waveform_b64}" alt="仿真波形">` : '';
+  const sch = d.schematic_b64 ? `<img class="wave" src="data:image/png;base64,${d.schematic_b64}" alt="电路原理图">` : '';
   const retries = (d.retry_log || []).filter(r => r.stage !== 'generate');
   const retryHtml = retries.length
     ? `<details><summary>仿真在环日志（${retries.length} 次自动修复）</summary><pre>${escapeHtml(JSON.stringify(retries, null, 1))}</pre></details>` : '';
@@ -97,6 +98,7 @@ function renderEvidence(d) {
     <div class="verdict ${d.ok ? 'ok' : 'fail'}">${d.ok ? '✅ 仿真验证通过' : '⚠️ 自动修复后仍未通过'}</div>
     <div><span class="badge">实测指标</span><span class="badge">${d.elapsed}s</span></div>
     <div class="metrics">${metrics || '<span style="color:var(--dim)">无</span>'}</div>
+    ${sch ? '<div><span class="badge">原理图（AI 生成）</span></div>' + sch : ''}
     ${wave}
     <div class="interp">${escapeHtml(d.interpretation || '')}</div>
     <details><summary>网表（ngspice）</summary><pre>${escapeHtml(d.netlist)}</pre></details>

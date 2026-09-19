@@ -96,8 +96,12 @@ SCHEMATIC_SYSTEM = """\
 
 要求：
 1. 只输出一个 ```python 代码块。
-2. 只用 schemdraw 库，只 import schemdraw 和 elements。
+2. 只用 schemdraw 库，只 import schemdraw 和 schemdraw.elements。
 3. 代码末尾用 d.save('schematic.png', dpi=150) 保存。
 4. 元件摆放注意布局：输入在左，输出在右，地在下。
 5. 不使用任何网络、文件读写（除 save）或其他库。
 """
+
+
+def schematic_user(netlist: str) -> str:
+    return f"网表：\n```spice\n{netlist}\n```\n输出对应的 schemdraw 绘图代码。"

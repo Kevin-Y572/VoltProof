@@ -18,6 +18,7 @@ from pathlib import Path
 
 from . import checks, llm, measure, prompts
 from .ngspice_runner import run_netlist
+from .render_schematic import render_schematic
 from .render_wave import render_wave
 
 MAX_RETRIES = 3
@@ -32,6 +33,7 @@ class Evidence:
     request: str = ""
     netlist: str = ""
     waveform_b64: str | None = None
+    schematic_b64: str | None = None
     metrics: dict = field(default_factory=dict)
     interpretation: str = ""
     retry_log: list[dict] = field(default_factory=list)  # 每轮 {round, stage, problems}
@@ -43,6 +45,7 @@ class Evidence:
             "request": self.request,
             "netlist": self.netlist,
             "waveform_b64": self.waveform_b64,
+            "schematic_b64": self.schematic_b64,
             "metrics": self.metrics,
             "interpretation": self.interpretation,
             "retry_log": self.retry_log,
@@ -99,6 +102,17 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
             prompts.INTERPRET_SYSTEM,
             prompts.interpret_user(request, netlist, ev.metrics or {"提示": "未解析到波形数据"}),
         )
+
+        # 电路原理图（W4）：LLM 生成 schemdraw 代码，受限执行，失败静默降级为网表
+        try:
+            code = llm.extract_code_block(
+                llm.chat(prompts.SCHEMATIC_SYSTEM, prompts.schematic_user(netlist))
+            )
+            png = render_schematic(code, OUT_DIR / "schematic.png")
+            if png:
+                ev.schematic_b64 = _b64_png(png)
+        except Exception:
+            pass
         break
 
     ev.elapsed = time.monotonic() - t0

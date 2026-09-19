@@ -144,6 +144,24 @@ def main() -> int:
         r = client.post("/demo/raw", json={"message": "设计1kHz低通"})
         check("POST /demo/raw 200", r.status_code == 200 and "裸模型" in r.json()["text"])
 
+    # ---- 6. 电路图受限执行 ----
+    from app.render_schematic import render_schematic
+    import tempfile
+
+    SCH_OK = """import schemdraw
+import schemdraw.elements as elm
+d = schemdraw.Drawing()
+d += elm.SourceV().up().label('5V')
+d += elm.Resistor().right().label('1k')
+d += elm.Capacitor().down().label('1uF')
+d.save('schematic.png', dpi=150)
+"""
+    tmpdir = tempfile.mkdtemp(prefix="cp_sch_test_")
+    png = render_schematic(SCH_OK, Path(tmpdir) / "sch.png")
+    check("电路图: 正常代码出 PNG", png is not None and png.exists() and png.stat().st_size > 1000)
+    check("电路图: import os 被拒", render_schematic("import os\nos.system('echo hi')", Path(tmpdir) / "x.png") is None)
+    check("电路图: 语法错误被拒", render_schematic("def (", Path(tmpdir) / "y.png") is None)
+
     print(f"\n{'='*40}\n{'全部通过' if not FAILURES else '失败: ' + ', '.join(FAILURES)}")
     return 1 if FAILURES else 0
 
