@@ -60,7 +60,8 @@ python bench/run_exp.py --backend=skidl     # 综合实验（证据 bench/exp_sk
 | `CIRCUITPILOT_API_KEY` | 是 | OpenAI 兼容 API Key（也接受 `DEEPSEEK_API_KEY` / `OPENAI_API_KEY`） |
 | `CIRCUITPILOT_NGSPICE` | 是(Windows) | ngspice.exe 完整路径；已在 PATH 中可省略 |
 | `CIRCUITPILOT_BASE_URL` | 否 | 默认 DeepSeek `https://api.deepseek.com` |
-| `CIRCUITPILOT_MODEL` | 否 | 默认 `deepseek-chat` |
+| `CIRCUITPILOT_MODEL` | 否 | 默认 `deepseek-flash`（推理型：思考放 reasoning_content，重任务思考 1-13 分钟，谐波类精度极佳；换 `deepseek-chat` 快 10 倍） |
+| `CIRCUITPILOT_LLM_TIMEOUT` | 否 | 单次调用超时秒数，默认 480 |
 
 ## 实测经验（Windows + ngspice-47，踩坑记录）
 

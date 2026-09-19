@@ -1,9 +1,10 @@
 """OpenAI 兼容的 LLM 封装。模型/Key 全部走环境变量，不绑定供应商。  [W1]
 
 环境变量：
-  CIRCUITPILOT_API_KEY   必填
-  CIRCUITPILOT_BASE_URL  选填，默认 DeepSeek https://api.deepseek.com
-  CIRCUITPILOT_MODEL     选填，默认 deepseek-chat
+  CIRCUITPILOT_API_KEY        必填
+  CIRCUITPILOT_BASE_URL       选填，默认 DeepSeek https://api.deepseek.com
+  CIRCUITPILOT_MODEL          选填，默认 deepseek-flash（推理型，思考 1-13 分钟/任务）
+  CIRCUITPILOT_LLM_TIMEOUT    选填，单次调用超时秒数，默认 480（flash 长思考需要）
 """
 
 from __future__ import annotations
@@ -14,11 +15,11 @@ import openai
 from openai import OpenAI
 
 _BASE_URL = os.environ.get("CIRCUITPILOT_BASE_URL", "https://api.deepseek.com")
-_MODEL = os.environ.get("CIRCUITPILOT_MODEL", "deepseek-chat")
+_MODEL = os.environ.get("CIRCUITPILOT_MODEL", "deepseek-flash")
 _API_KEY = (os.environ.get("CIRCUITPILOT_API_KEY")
             or os.environ.get("DEEPSEEK_API_KEY")
             or os.environ.get("OPENAI_API_KEY", ""))
-_TIMEOUT = float(os.environ.get("CIRCUITPILOT_LLM_TIMEOUT", "240"))
+_TIMEOUT = float(os.environ.get("CIRCUITPILOT_LLM_TIMEOUT", "480"))
 
 _client: OpenAI | None = None
 
