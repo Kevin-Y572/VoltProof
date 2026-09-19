@@ -130,7 +130,9 @@ def chat_with_session(session_id: str, message: str) -> dict:
     if ev.ok:
         s["netlist"] = ev.netlist  # 只有验证通过的电路才进入会话状态
     s["history"].append({"user": message, "ok": ev.ok})
-    return ev.to_dict()
+    d = ev.to_dict()
+    d["session_id"] = s["id"]  # 空入参时客户端也能拿到新建的会话 id
+    return d
 
 
 if __name__ == "__main__":

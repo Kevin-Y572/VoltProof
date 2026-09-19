@@ -1,0 +1,152 @@
+"""管线与 FastAPI 接口的离线测试：monkeypatch 掉 llm.chat，不花一分钱。  [W3]
+
+覆盖路线图 W2/W3 的核心逻辑：
+  - 一次生成的网表直接通过 → 证据卡完整
+  - 静态检查失败 → 报错回喂 → 自动修复（仿真在环循环）
+  - 仿真失败（raw 缺失）→ 自动修复
+  - 会话多轮：第二轮携带上一轮验证过的网表
+  - POST /chat、POST /demo/raw、静态页托管
+
+运行：python tests/test_pipeline_mock.py
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# 确保测试用本地 ngspice（同 test_offline 的约定，已在用户环境变量持久化）
+os.environ.setdefault("CIRCUITPILOT_NGSPICE",
+                      "D:/Users/Lenovo/tools/ngspice-47/Spice64/bin/ngspice.exe")
+
+from unittest.mock import patch  # noqa: E402
+
+from app import llm, pipeline, prompts  # noqa: E402
+
+GOOD = """```spice
+* RC lowpass for test
+V1 in 0 AC 1
+R1 in out 1.59k
+C1 out 0 100n
+.control
+set filetype=ascii
+ac dec 20 10 100k
+write out.raw v(out)
+.endc
+.end
+```"""
+
+NO_GROUND = """```spice
+* broken: no node 0
+V1 in gndx AC 1
+R1 in out 1.59k
+C1 out gndx 100n
+.control
+set filetype=ascii
+ac dec 20 10 100k
+write out.raw v(out)
+.endc
+.end
+```"""
+
+NO_CONTROL = """```spice
+* passes static checks but writes no raw file
+V1 in 0 AC 1
+R1 in out 1.59k
+C1 out 0 100n
+.ac dec 20 10 100k
+.end
+```"""
+
+FAILURES: list[str] = []
+
+
+def check(name: str, cond: bool, detail: str = "") -> None:
+    tag = "PASS" if cond else "FAIL"
+    print(f"[{tag}] {name}" + (f"  ({detail})" if detail and not cond else ""))
+    if not cond:
+        FAILURES.append(name)
+
+
+class Scripted:
+    """按脚本顺序返回响应，并记录每次调用的参数。"""
+
+    def __init__(self, responses: list[str]):
+        self.responses = list(responses)
+        self.calls: list[tuple[str, str]] = []
+
+    def __call__(self, system: str, user: str, temperature: float = 0.2) -> str:
+        self.calls.append((system, user))
+        return self.responses.pop(0)
+
+
+def main() -> int:
+    # ---- 1. 一次通过 ----
+    with patch.object(llm, "chat", Scripted([GOOD, "解读：实测-3dB约1kHz。"])):
+        ev = pipeline.run_pipeline("1kHz低通滤波器")
+    check("一次通过: ok", ev.ok, str(ev.retry_log))
+    check("一次通过: 有波形", ev.waveform_b64 is not None and len(ev.waveform_b64) > 1000)
+    check("一次通过: 有指标", len(ev.metrics) > 0, str(ev.metrics))
+    check("一次通过: 有解读", "1kHz" in ev.interpretation)
+    check("一次通过: 无重试", len([r for r in ev.retry_log if r["stage"] != "generate"]) == 0)
+
+    # ---- 2. 静态检查失败 → 自动修复 ----
+    sc = Scripted([NO_GROUND, GOOD, "解读：修复后通过。"])
+    with patch.object(llm, "chat", sc):
+        ev = pipeline.run_pipeline("1kHz低通滤波器")
+    check("静态修复: ok", ev.ok, str(ev.retry_log))
+    stages = [r["stage"] for r in ev.retry_log]
+    check("静态修复: 记录了 static-check 轮", "static-check" in stages, str(stages))
+    check("静态修复: 修复提示包含报错", "参考地" in sc.calls[1][1], sc.calls[1][1][:120])
+
+    # ---- 3. 仿真失败（无 raw）→ 自动修复 ----
+    with patch.object(llm, "chat", Scripted([NO_CONTROL, GOOD, "解读：修复后通过。"])):
+        ev = pipeline.run_pipeline("1kHz低通滤波器")
+    check("仿真修复: ok", ev.ok, str(ev.retry_log))
+    stages = [r["stage"] for r in ev.retry_log]
+    check("仿真修复: 记录了 simulate 轮", "simulate" in stages, str(stages))
+
+    # ---- 4. 会话多轮：携带上一轮网表 ----
+    pipeline._SESSIONS.clear()
+    s1 = Scripted([GOOD, "第一轮解读。"])
+    with patch.object(llm, "chat", s1):
+        d1 = pipeline.chat_with_session("sess-test", "先做1kHz低通")
+    check("会话: 第一轮返回 session_id", d1["session_id"] == "sess-test")
+    s2 = Scripted([GOOD.replace("1.59k", "8k").replace("100n", "20n"), "第二轮解读。"])
+    with patch.object(llm, "chat", s2):
+        d2 = pipeline.chat_with_session("sess-test", "把截止频率降到1kHz左右重选参数")
+    gen_user2 = s2.calls[0][1]
+    check("会话: 第二轮携带上轮网表", "当前网表" in gen_user2 and "V1 in 0" in gen_user2, gen_user2[:100])
+    check("会话: 历史两条", len(pipeline._SESSIONS["sess-test"]["history"]) == 2)
+
+    # ---- 5. FastAPI 接口 ----
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    with TestClient(app) as client:
+        r = client.get("/")
+        check("GET / 返回对话页", r.status_code == 200 and "CircuitPilot" in r.text)
+        r = client.get("/compare.html")
+        check("GET /compare.html 返回对照页", r.status_code == 200 and "同题对照" in r.text)
+
+    with patch.object(llm, "chat", Scripted([GOOD, "接口解读。"])) as sc2, TestClient(app) as client:
+        r = client.post("/chat", json={"session_id": "api-test", "message": "1kHz低通"})
+        d = r.json()
+        check("POST /chat 200", r.status_code == 200, str(d)[:200])
+        check("POST /chat 证据完整", d.get("ok") is True and d.get("waveform_b64")
+              and d.get("session_id") == "api-test", str(d.keys()))
+
+    with patch.object(llm, "chat", lambda *a, **k: "裸模型回答：用1.6k电阻和100nF电容。"), \
+            TestClient(app) as client:
+        r = client.post("/demo/raw", json={"message": "设计1kHz低通"})
+        check("POST /demo/raw 200", r.status_code == 200 and "裸模型" in r.json()["text"])
+
+    print(f"\n{'='*40}\n{'全部通过' if not FAILURES else '失败: ' + ', '.join(FAILURES)}")
+    return 1 if FAILURES else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

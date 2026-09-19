@@ -7,6 +7,9 @@ from pathlib import Path
 import matplotlib
 
 matplotlib.use("Agg")  # 无头渲染，服务器环境必须
+# 中文标题/图例不变成豆腐块：Windows 优先微软雅黑/黑体
+matplotlib.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Noto Sans CJK SC", "DejaVu Sans"]
+matplotlib.rcParams["axes.unicode_minus"] = False
 import matplotlib.pyplot as plt
 
 from .measure import Traces

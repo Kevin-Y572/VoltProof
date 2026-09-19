@@ -61,7 +61,7 @@ function fill(text) { input.value = text; input.focus(); }
 async function send() {
   const text = input.value.trim();
   if (!text) return;
-  input.value = ""; send.disabled = true;
+  input.value = ""; send_.disabled = true;
   addMsg('user', text);
   const holder = addMsg('assistant', '<span style="color:var(--dim)">仿真验证中…（生成网表 → ngspice 执行 → 指标计算）</span>');
   try {
@@ -75,7 +75,7 @@ async function send() {
   } catch (e) {
     holder.innerHTML = `<div class="evidence">请求失败：${e}</div>`;
   }
-  send.disabled = false; input.focus();
+  send_.disabled = false; input.focus();
 }
 
 function addMsg(role, html) {

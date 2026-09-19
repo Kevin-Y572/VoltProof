@@ -12,6 +12,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# 本机 ngspice 安装位置（已 setx 到用户环境变量，此处兜底保证测试可独立运行）
+import os
+
+os.environ.setdefault("CIRCUITPILOT_NGSPICE",
+                      "D:/Users/Lenovo/tools/ngspice-47/Spice64/bin/ngspice.exe")
+
 from app import checks, llm, measure  # noqa: E402
 from app.ngspice_runner import run_netlist  # noqa: E402
 from app.render_wave import render_wave  # noqa: E402
