@@ -18,10 +18,10 @@ setx CIRCUITPILOT_NGSPICE "D:\Users\Lenovo\tools\ngspice-47\Spice64\bin\ngspice.
 # 2. 安装依赖
 pip install -r requirements.txt
 
-# 3. 配置模型（OpenAI 兼容接口，默认指向智谱 GLM）
+# 3. 配置模型（OpenAI 兼容接口，默认 DeepSeek）
 setx CIRCUITPILOT_API_KEY 你的key         # Git Bash 会话内用 export（setx 对已开终端不生效）
-setx CIRCUITPILOT_MODEL glm-4-flash       # 可选，默认即此
-setx CIRCUITPILOT_BASE_URL https://open.bigmodel.cn/api/paas/v4/   # 可选
+setx CIRCUITPILOT_MODEL deepseek-chat      # 可选，默认即此
+setx CIRCUITPILOT_BASE_URL https://api.deepseek.com   # 可选
 
 # 4. 离线自检（不需要 API Key，验证仿真链路/检查器/重试循环/接口契约）
 python tests/test_offline.py
@@ -42,8 +42,8 @@ uvicorn app.main:app --reload
 |---|---|---|
 | `CIRCUITPILOT_API_KEY` | 是 | OpenAI 兼容 API Key（也接受 `OPENAI_API_KEY`） |
 | `CIRCUITPILOT_NGSPICE` | 是(Windows) | ngspice.exe 完整路径；已在 PATH 中可省略 |
-| `CIRCUITPILOT_BASE_URL` | 否 | 默认智谱开放平台 |
-| `CIRCUITPILOT_MODEL` | 否 | 默认 `glm-4-flash` |
+| `CIRCUITPILOT_BASE_URL` | 否 | 默认 DeepSeek `https://api.deepseek.com` |
+| `CIRCUITPILOT_MODEL` | 否 | 默认 `deepseek-chat` |
 
 ## 实测经验（Windows + ngspice-47，踩坑记录）
 

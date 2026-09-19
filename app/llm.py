@@ -2,8 +2,8 @@
 
 环境变量：
   CIRCUITPILOT_API_KEY   必填
-  CIRCUITPILOT_BASE_URL  选填，默认智谱 https://open.bigmodel.cn/api/paas/v4/
-  CIRCUITPILOT_MODEL     选填，默认 glm-4-flash
+  CIRCUITPILOT_BASE_URL  选填，默认 DeepSeek https://api.deepseek.com
+  CIRCUITPILOT_MODEL     选填，默认 deepseek-chat
 """
 
 from __future__ import annotations
@@ -12,8 +12,8 @@ import os
 
 from openai import OpenAI
 
-_BASE_URL = os.environ.get("CIRCUITPILOT_BASE_URL", "https://open.bigmodel.cn/api/paas/v4/")
-_MODEL = os.environ.get("CIRCUITPILOT_MODEL", "glm-4-flash")
+_BASE_URL = os.environ.get("CIRCUITPILOT_BASE_URL", "https://api.deepseek.com")
+_MODEL = os.environ.get("CIRCUITPILOT_MODEL", "deepseek-chat")
 _API_KEY = os.environ.get("CIRCUITPILOT_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
 
 _client: OpenAI | None = None
