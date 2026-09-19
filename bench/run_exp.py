@@ -4,7 +4,7 @@
 执行方式与真实用户一致：T1 全新设计，T2-T4 走会话链（在上一轮验证通过的
 网表上继续修改），每任务留存完整证据到 bench/exp/<task_id>/。
 
-用法：python bench/run_exp.py
+用法：python bench/run_exp.py [--backend=skidl]
 """
 
 from __future__ import annotations
@@ -26,22 +26,26 @@ OUT = BENCH / "exp"
 
 def main() -> None:
     tasks = json.loads((BENCH / "exp_tasks.json").read_text(encoding="utf-8"))["tasks"]
+    backend = "skidl" if "--backend=skidl" in sys.argv else "spice"
+    outdir = OUT.parent / f"exp_skidl" if backend == "skidl" else OUT
+    outdir.mkdir(parents=True, exist_ok=True)
     summary = []
     prev_netlist: str | None = None  # 会话链：上一轮验收通过的网表
 
     for t in tasks:
-        tdir = OUT / t["id"]
+        tdir = outdir / t["id"]
         tdir.mkdir(parents=True, exist_ok=True)
         # 清掉上一轮残留：独立验收器取目录内 raw，跨轮残留会读到旧数据
         for old in tdir.glob("*"):
             old.unlink()
-        print(f"\n===== [{t['id']}] {t['part']} =====")
+        print(f"\n===== [{t['id']}] {t['part']} (backend={backend}) =====")
         print(f"prompt: {t['prompt']}")
         t0 = time.monotonic()
         try:
             # 综合实验电路（振荡+分频+滤波链）比 bench 任务重：放宽重试预算
             ev = run_pipeline(t["prompt"], previous_netlist=prev_netlist,
-                              max_retries=5, validators=get_validators(t["id"]))
+                              max_retries=5, validators=get_validators(t["id"]),
+                              backend=backend)
         except Exception as e:
             print(f"[{t['id']}] 管道异常: {e}")
             summary.append({"id": t["id"], "ok": False, "error": str(e),
@@ -78,7 +82,7 @@ def main() -> None:
     for s in summary:
         print(f"  {s['id']}: {'ok' if s['ok'] else 'FAIL'} retries={s.get('retries')} "
               f"elapsed={s.get('elapsed')}s")
-    (OUT / "summary.json").write_text(
+    (outdir / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
 

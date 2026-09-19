@@ -36,6 +36,23 @@ uvicorn app.main:app --reload
 # 同题对照演示页：http://127.0.0.1:8000/compare.html
 ```
 
+## 双轨后端（SKiDL vs 裸 SPICE 网表）
+
+`backend="spice"`（默认）：LLM 直接写 SPICE 网表。
+`backend="skidl"`：LLM 写 [SKiDL](https://github.com/devbisme/skidl)（MIT）的 Python 电路代码，
+沙箱执行后生成网表——连接显式、无网表方言陷阱（浮空/单位/续行），`.control`
+块由构建器按 print 协议固定拼接，`set filetype=ascii`/`write` 不再依赖 LLM。
+
+```bash
+python bench/run_bench.py --backend=skidl   # 基准（报告 bench/report_skidl.md）
+python bench/run_exp.py --backend=skidl     # 综合实验（证据 bench/exp_skidl/）
+```
+
+同日 A/B（2026-09-19，DeepSeek）：bench 通过率 spice 9/10 vs skidl 9/10（打平，
+唯二失败均为 square-osc 方差）；综合实验谐波分析两轨均达理论值
+（a3/a1=0.330≈1/3、a5/a1=0.193≈0.2）。协议合规：实测 skidl 2.3.0 的
+`skidl.pyspice` 原语不加载 PySpice（GPL）。
+
 环境变量一览：
 
 | 变量 | 必填 | 说明 |

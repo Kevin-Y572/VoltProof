@@ -18,3 +18,4 @@ bench/exp/
 bench/exp_run.log
 skidl.erc
 skidl.log
+bench/exp_skidl/
