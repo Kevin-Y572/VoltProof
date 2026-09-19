@@ -16,3 +16,5 @@ ngspice.log
 .idea/
 bench/exp/
 bench/exp_run.log
+skidl.erc
+skidl.log
