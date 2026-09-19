@@ -33,8 +33,11 @@ class CheckResult:
 
 
 def iter_element_lines(lines: list[str]):
-    """产出 (行号, 内容)，只含元件行：跳过注释、点指令、续行和 .control 块。"""
+    """产出 (行号, 内容)，只含元件行：跳过注释、点指令、续行、.control 块
+    和 .subckt/.ends 体（子电路内部节点是局部作用域，不参与顶层浮空检查；
+    其内部错误由 ngspice 真实报错兜底）。"""
     in_control = False
+    subckt_depth = 0
     for i, raw in enumerate(lines, start=1):
         s = raw.strip()
         if not s or s.startswith(("*", "#")):
@@ -46,7 +49,17 @@ def iter_element_lines(lines: list[str]):
         if low == ".endc":
             in_control = False
             continue
-        if in_control or s.startswith((".", "+")):
+        if in_control:
+            continue
+        if low.startswith(".subckt"):
+            subckt_depth += 1
+            continue
+        if low.startswith(".ends"):
+            subckt_depth = max(0, subckt_depth - 1)
+            continue
+        if subckt_depth:
+            continue
+        if s.startswith((".", "+")):
             continue
         yield i, s
 

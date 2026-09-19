@@ -221,6 +221,14 @@ def main() -> int:
             "Q1 2 3 4 2N2222\nRe 4 0 100\n.model 2N2222 NPN\n.tran 1u 1m\n")
         check("检查器: 2N2222 模型名零误报", c4b.ok, str(c4b.errors))
 
+        # .subckt 体内部节点是局部作用域，不许当顶层浮空误报（exp1 曾卡死 4 轮）
+        c6 = checks.run_checks(
+            "* top\n"
+            "X1 a mid mysub\nR1 a mid 1k\nR2 mid 0 2k\n"
+            ".subckt mysub p q\nRin p qq 1k\nRload qq 0 2k\nRout q qq 3k\n.ends\n"
+            ".model d1 D\n.tran 1u 1m\n")
+        check("检查器: .subckt 体零误报", c6.ok, str(c6.errors))
+
         c5 = checks.run_checks(RC_NETLIST)
         check("检查器: 好网表零误报", c5.ok, str(c5.errors))
 

@@ -24,7 +24,9 @@ GENERATE_SYSTEM = """\
    write out.raw v(n1) v(n2)
    .endc
    注意 set filetype=ascii 必须有，否则输出二进制 raw 无法解析。
-9. 输出节点命名清楚（如 v(out)、v(load)），便于后续指标计算。
+9. 输出节点必须用有含义的字母命名（如 out1k、out3k、sum、vout），禁止裸数字；
+   write 必须写出全部输出节点的波形（write out.raw v(out1k) v(out3k)），
+   漏写输出节点会导致无法验证。
 10. 禁止作弊：不得用行为源（B/E 源直接把目标输出写成表达式）代替真实电路
     功能（振荡/分频/滤波/放大都应有对应的电路结构），输出波形必须是电路
     计算出来的。

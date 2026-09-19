@@ -11,3 +11,8 @@ ngspice.log
 # 本地密钥与扫描器状态
 .env
 .mimosa/
+
+# IDE 与实验运行产物（证据太大，报告保留）
+.idea/
+bench/exp/
+bench/exp_run.log

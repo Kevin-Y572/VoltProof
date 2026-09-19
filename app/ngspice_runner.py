@@ -90,7 +90,9 @@ def run_netlist(netlist_text: str, workdir: str | Path | None = None) -> SimResu
     try:
         proc = subprocess.run(
             [_NGSPICE, "-b", "-o", str(log_file), str(cir)],
-            capture_output=True, text=True, timeout=_TIMEOUT, cwd=workdir,
+            capture_output=True, timeout=_TIMEOUT, cwd=workdir,
+            # ngspice Windows 输出可能混 GBK/拉丁字节，强制 utf-8+replace 防读取线程崩溃
+            encoding="utf-8", errors="replace",
         )
         log = log_file.read_text(encoding="utf-8", errors="replace") if log_file.exists() else ""
         fatal = _fatal_in(proc.stderr, proc.stdout, log)
