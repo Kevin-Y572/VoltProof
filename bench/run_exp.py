@@ -32,6 +32,9 @@ def main() -> None:
     for t in tasks:
         tdir = OUT / t["id"]
         tdir.mkdir(parents=True, exist_ok=True)
+        # 清掉上一轮残留：独立验收器取目录内 raw，跨轮残留会读到旧数据
+        for old in tdir.glob("*"):
+            old.unlink()
         print(f"\n===== [{t['id']}] {t['part']} =====")
         print(f"prompt: {t['prompt']}")
         t0 = time.monotonic()
