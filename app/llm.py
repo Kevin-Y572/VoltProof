@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 
+import openai
 from openai import OpenAI
 
 _BASE_URL = os.environ.get("CIRCUITPILOT_BASE_URL", "https://api.deepseek.com")
@@ -17,6 +18,7 @@ _MODEL = os.environ.get("CIRCUITPILOT_MODEL", "deepseek-chat")
 _API_KEY = (os.environ.get("CIRCUITPILOT_API_KEY")
             or os.environ.get("DEEPSEEK_API_KEY")
             or os.environ.get("OPENAI_API_KEY", ""))
+_TIMEOUT = float(os.environ.get("CIRCUITPILOT_LLM_TIMEOUT", "240"))
 
 _client: OpenAI | None = None
 
@@ -26,21 +28,41 @@ def _get_client() -> OpenAI:
     if _client is None:
         if not _API_KEY:
             raise RuntimeError("缺少 CIRCUITPILOT_API_KEY 环境变量")
-        _client = OpenAI(api_key=_API_KEY, base_url=_BASE_URL)
+        _client = OpenAI(api_key=_API_KEY, base_url=_BASE_URL,
+                         timeout=_TIMEOUT, max_retries=1)
     return _client
 
 
 def chat(system: str, user: str, temperature: float = 0.2) -> str:
-    """单轮调用。生成网表场景 temperature 要低，减少幻觉。"""
-    resp = _get_client().chat.completions.create(
-        model=_MODEL,
-        temperature=temperature,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-    )
-    return resp.choices[0].message.content or ""
+    """单轮调用。生成网表场景 temperature 要低，减少幻觉。
+
+    慢模型（如 deepseek-flash 生成复杂网表）偶发挂起：超时/连接类错误
+    自动重试一次，其他异常立即抛出。"""
+    last: Exception | None = None
+    for attempt in range(2):
+        try:
+            resp = _get_client().chat.completions.create(
+                model=_MODEL,
+                temperature=temperature,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            )
+            msg = resp.choices[0].message
+            content = msg.content or ""
+            if not content.strip():
+                # 推理型模型（如 deepseek-flash）超长思考后 content 偶发为空，
+                # 思考文本里通常已含代码块——回落 reasoning_content 由提取器挖掘
+                content = getattr(msg, "reasoning_content", "") or ""
+            return content
+        except openai.OpenAIError as e:
+            last = e
+            transient = isinstance(e, (openai.APITimeoutError, openai.APIConnectionError))
+            if attempt == 0 and transient:
+                continue
+            raise
+    raise last  # pragma: no cover
 
 
 def extract_code_block(text: str) -> str:
