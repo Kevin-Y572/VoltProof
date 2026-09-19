@@ -21,6 +21,7 @@ from . import checks, llm, measure, prompts
 from .ngspice_runner import run_netlist
 from .render_schematic import render_schematic
 from .render_wave import render_wave
+from .skidl_builder import build_netlist as skidl_build
 
 if TYPE_CHECKING:  # 只做类型标注，避免运行时循环依赖
     from .measure import Traces
@@ -29,6 +30,7 @@ if TYPE_CHECKING:  # 只做类型标注，避免运行时循环依赖
 Validator = Callable[["Evidence", "Traces | None"], list[dict]]
 
 MAX_RETRIES = 3
+SKIDL_BUILD_FIX = 2  # SKiDL 轨：代码层（执行报错）的修复轮数
 OUT_DIR = Path(__file__).resolve().parent.parent / "out"
 
 
@@ -45,6 +47,7 @@ class Evidence:
     interpretation: str = ""
     retry_log: list[dict] = field(default_factory=list)  # 每轮 {round, stage, problems}
     checks: list[dict] = field(default_factory=list)      # 验收明细 [{name, ok, detail}]
+    generator_code: str = ""  # skidl 轨的生成代码（诊断用）
     elapsed: float = 0.0
 
     def to_dict(self) -> dict:
@@ -52,6 +55,7 @@ class Evidence:
             "ok": self.ok,
             "request": self.request,
             "netlist": self.netlist,
+            "generator_code": self.generator_code,
             "waveform_b64": self.waveform_b64,
             "schematic_b64": self.schematic_b64,
             "metrics": self.metrics,
@@ -68,16 +72,22 @@ def _b64_png(png: Path) -> str:
 
 def run_pipeline(request: str, previous_netlist: str | None = None,
                  max_retries: int = MAX_RETRIES,
-                 validators: list[Validator] | None = None) -> Evidence:
+                 validators: list[Validator] | None = None,
+                 backend: str = "spice") -> Evidence:
     ev = Evidence(request=request)
     t0 = time.monotonic()
 
-    netlist = llm.extract_code_block(
-        llm.chat(prompts.GENERATE_SYSTEM, prompts.generate_user(request, previous_netlist))
-    )
-    ev.retry_log.append({"round": 0, "stage": "generate", "problems": []})
+    if backend == "skidl":
+        netlist = _skidl_track(request, ev)
+    else:
+        netlist = llm.extract_code_block(
+            llm.chat(prompts.GENERATE_SYSTEM, prompts.generate_user(request, previous_netlist))
+        )
+        ev.retry_log.append({"round": 0, "stage": "generate", "problems": []})
 
     for rnd in range(max_retries + 1):
+        if not netlist:  # skidl 轨构建彻底失败（日志已在 _skidl_track 里）
+            break
         # ---- 静态检查 ----
         chk = checks.run_checks(netlist)
         if not chk.ok:
@@ -170,6 +180,26 @@ def _repair(netlist: str, problems: list[str]) -> str:
 def _tune(request: str, netlist: str, problems: list[str]) -> str:
     tuned = llm.chat(prompts.TUNE_SYSTEM, prompts.tune_user(request, netlist, problems))
     return llm.extract_code_block(tuned)
+
+
+def _skidl_track(request: str, ev: "Evidence") -> str | None:
+    """SKiDL 轨：LLM 写 Python 电路代码 → 沙箱执行出网表（代码层修复环），
+    产出的网表进入主管线（静态检查/仿真/验收环与 spice 轨完全复用）。"""
+    code = llm.extract_code_block(llm.chat(prompts.SKIDL_SYSTEM, prompts.skidl_user(request)))
+    ev.generator_code = code
+    for rnd in range(SKIDL_BUILD_FIX + 1):
+        netlist, err = skidl_build(code)
+        if netlist:
+            ev.retry_log.append({"round": rnd, "stage": "skidl-build", "problems": []})
+            return netlist
+        ev.retry_log.append({"round": rnd, "stage": "skidl-build", "problems": [err[:400]]})
+        if rnd == SKIDL_BUILD_FIX:
+            return None
+        code = llm.extract_code_block(
+            llm.chat(prompts.SKIDL_REPAIR_SYSTEM, prompts.skidl_repair_user(code, [err]))
+        )
+        ev.generator_code = code
+    return None
 
 
 # ---------------------------------------------------------------------------

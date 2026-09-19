@@ -240,7 +240,38 @@ def main() -> int:
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
-    print(f"\n{'='*40}\n{'全部通过' if not FAILURES else '失败: ' + ', '.join(FAILURES)}")
+        # ---- 6. SKiDL 双轨构建器 ----
+        from app.skidl_builder import build_netlist as skidl_build
+
+        SKIDL_OK = """\
+from skidl import generate_netlist
+from skidl.pyspice import R, C, V, gnd, Net
+inp, out = Net("IN"), Net("OUT")
+v1 = V(value="AC 1")
+r1 = R(value="1.59k")
+c1 = C(value="100n")
+inp += v1[1], r1[1]
+out += r1[2], c1[1]
+gnd += v1[2], c1[2]
+generate_netlist()
+print("ANALYSIS: ac dec 20 10 100k")
+print("OUT_NODES: v(OUT)")
+"""
+        nl, err = skidl_build(SKIDL_OK)
+        check("skidl: 构建成功", nl is not None, err)
+        if nl:
+            check("skidl: 拼接 .control/write/.end",
+                  "set filetype=ascii" in nl and "write out.raw v(OUT)" in nl and nl.strip().endswith(".end"))
+            sim_sk = run_netlist(nl, workdir=tmp / "skidl")
+            check("skidl: 产出的网表能过 ngspice 且有 raw",
+                  sim_sk.ok and sim_sk.raw_path is not None, (sim_sk.log or "")[-200:])
+            if sim_sk.raw_path:
+                tr_sk = measure.load_traces(sim_sk.raw_path)
+                check("skidl: 解析到 v(OUT)", any("out" in k.lower() for k in tr_sk.signals))
+        nl_bad, _err = skidl_build("import os\nos.system('echo hi')")
+        check("skidl: import os 被拒", nl_bad is None)
+
+        print(f"\n{'='*40}\n{'全部通过' if not FAILURES else '失败: ' + ', '.join(FAILURES)}")
     return 1 if FAILURES else 0
 
 

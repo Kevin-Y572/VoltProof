@@ -156,3 +156,80 @@ SCHEMATIC_SYSTEM = """\
 
 def schematic_user(netlist: str) -> str:
     return f"网表：\n```spice\n{netlist}\n```\n输出对应的 schemdraw 绘图代码。"
+
+
+# ---------------------------------------------------------------------------
+# SKiDL 双轨（backend="skidl"）：LLM 写 Python 电路代码，构建器出网表
+# ---------------------------------------------------------------------------
+
+SKIDL_SYSTEM = """\
+你是电路设计专家，用 SKiDL（Python 电路即代码库）实现电路。用户给出需求，
+你输出一段 Python 代码，代码会被沙箱执行并生成 SPICE 网表交给 ngspice 仿真。
+
+硬性规则：
+1. 只输出一个 ```python 代码块，不要解释。
+2. 只 import：from skidl import generate_netlist / from skidl.pyspice import R,C,L,V,Q,D,E,gnd,Net
+   （禁止 import 其他任何库；本机没有 KiCad 元件库，不要用 Part("Device",...)）。
+3. 用 Net("名字") 建网络，`net += 元件引脚` 连接；gnd 是地。输出节点的 Net
+   名必须用有含义的字母名（out1k、sum 等，禁止裸数字）。
+4. 电压源 value 的网表会自动加 DC 前缀：
+   - 直流：V(value="12") → "DC 12"
+   - 瞬态正弦：V(value="0 SIN(0 2.5 1k)") → "DC 0 SIN(...)"（DC 初值必须显式写在最前）
+   - 交流扫描：V(value="AC 1") → "DC AC 1"
+   value 绝不能以 SIN/PULSE/PWL 关键字直接开头（会产生非法网表）。
+5. 代码末尾必须 print 三行协议（构建器据此拼 .control，不要自己写 .control）：
+   print("ANALYSIS: tran 10u 10m")          # 分析命令；ac 用 "ac dec 20 10 100k"
+   print("OUT_NODES: v(out1k) v(out3k)")    # write 的信号，必须真实存在
+   print("EXTRA: .model mynpn NPN(beta=100)")  # 需要的 .model/.ic 等原生指令，没有就省略此行
+6. 振荡器类电路用不对称元件值或 EXTRA 里加 .ic 打破对称静态点，否则不起振。
+7. 运放可用 E 原语自建（注意限幅防爆），或用电阻网络等效。
+8. 每个网络至少连接两个元件引脚（悬空网络会 singular matrix）。
+"""
+
+SKIDL_EXAMPLE = """\
+```python
+from skidl import generate_netlist
+from skidl.pyspice import R, C, V, gnd, Net
+
+inp, out = Net("IN"), Net("OUT")
+v1 = V(value="AC 1")
+r1 = R(value="1.59k")
+c1 = C(value="100n")
+inp += v1[1], r1[1]
+out += r1[2], c1[1]
+gnd += v1[2], c1[2]
+generate_netlist()
+print("ANALYSIS: ac dec 20 10 100k")
+print("OUT_NODES: v(OUT)")
+```
+"""
+
+
+def skidl_user(request: str, previous_code: str | None = None) -> str:
+    if previous_code:
+        return (
+            f"当前 SKiDL 代码：\n```python\n{previous_code}\n```\n\n"
+            f"用户修改要求：{request}\n在保持其余部分不变的前提下修改，输出完整新代码。"
+        )
+    return f"参考示例（格式与协议必须一致）：\n{SKIDL_EXAMPLE}\n电路需求：{request}"
+
+
+SKIDL_REPAIR_SYSTEM = """\
+你是 SKiDL 代码调试专家。用户给出报错的 SKiDL 代码和错误信息，定位原因并
+输出修复后的完整代码。只输出一个 ```python 代码块，不要解释。
+
+常见错误速查：
+- PySpicePart/pin 相关 AttributeError：引脚访问方式错误，用 part["引脚名"] 或 part[1]
+- Can't assign to a part：连接必须用 net += part[...]，不能用等号
+- generate_netlist 报 model not found：模型名在 EXTRA 里补 .model 定义
+- 网表 V 行非法：value 不能以 SIN/PULSE 开头，DC 初值写在最前（见规则 4）
+- 名称为数字的节点：Net 名必须字母开头
+- 代码超时：电路过大或参数异常（如 1e12 数值），检查元件值
+"""
+
+
+def skidl_repair_user(code: str, problems: list[str]) -> str:
+    return (
+        f"SKiDL 代码：\n```python\n{code}\n```\n\n"
+        f"问题列表：\n" + "\n".join("- " + p for p in problems) + "\n\n输出修复后的完整代码。"
+    )

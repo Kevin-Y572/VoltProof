@@ -22,12 +22,13 @@ def main() -> None:
     tasks = json.loads((BENCH / "tasks.json").read_text(encoding="utf-8"))["tasks"]
     if "--quick" in sys.argv:
         tasks = tasks[:4]
+    backend = "skidl" if "--backend=skidl" in sys.argv else "spice"
 
     rows = []
     for t in tasks:
         t0 = time.monotonic()
         try:
-            ev = run_pipeline(t["prompt"])
+            ev = run_pipeline(t["prompt"], backend=backend)
             ok = ev.ok
             retries = len([r for r in ev.retry_log if r["stage"] != "generate"])
         except Exception as e:
@@ -44,7 +45,7 @@ def main() -> None:
     passed = sum(r["ok"] for r in rows)
     avg_time = sum(r["elapsed"] for r in rows) / max(len(rows), 1)
     report = [
-        "# 基准报告",
+        f"# 基准报告（backend={backend}）",
         f"- 时间：{time.strftime('%Y-%m-%d %H:%M')}",
         f"- 通过：{passed}/{len(rows)}（{passed / len(rows):.0%}）",
         f"- 平均耗时：{avg_time:.1f}s",
@@ -53,8 +54,8 @@ def main() -> None:
         "|---|---|---|---|",
     ]
     report += [f"| {r['id']} | {'✅' if r['ok'] else '❌'} | {r['retries']} | {r['elapsed']} |" for r in rows]
-    (BENCH / "report.md").write_text("\n".join(report), encoding="utf-8")
-    print(f"\n通过率 {passed}/{len(rows)}，报告已写入 bench/report.md")
+    (BENCH / f"report_{backend}.md").write_text("\n".join(report), encoding="utf-8")
+    print(f"\n通过率 {passed}/{len(rows)}，报告已写入 bench/report_{backend}.md")
     sys.exit(0 if passed == len(rows) else 1)
 
 

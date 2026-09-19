@@ -5,3 +5,4 @@ spyci>=0.1
 matplotlib>=3.8
 numpy>=1.26
 schemdraw>=0.19
+skidl>=2.0
