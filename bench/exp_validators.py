@@ -114,12 +114,23 @@ def _synth_output(outs):
     （0V 左右的'求和虚短点'也叫 sum，不能选），否则取 vpp 最大的非激励信号。"""
     if not outs:
         return None
-    named = [(n, (t, y)) for n, (t, y) in outs.items()
-             if any(p in n.lower() for p in ("sum", "synth", "tri"))
-             and float(np.ptp(y)) > 0.2]
-    pool = named or list(outs.items())
-    n, (t, y) = max(pool, key=lambda kv: float(np.ptp(kv[1][1])))
-    return n, SignalStats(n, t, y), (t, y)
+    big = [(n, (t, y)) for n, (t, y) in outs.items() if float(np.ptp(y)) > 0.2]
+    named = [(n, (t, y)) for n, (t, y) in big
+             if any(p in n.lower() for p in ("sum", "synth", "tri"))]
+    # 合成输出的特征：1k 与 3k 谱线都显著；单一谱线只是某路支路
+    # （曾把 3kHz 支路误当合成输出，a3/a1 倒挂 2.3）
+    def dual(kv):
+        t, y = kv[1]
+        a1, a3 = harmonic_amp(t, y, 1000), harmonic_amp(t, y, 3000)
+        peak = max(a1, a3, 1e-12)
+        return min(a1, a3) > 0.1 * peak
+
+    for pool in ([kv for kv in named if dual(kv)],
+                 [kv for kv in big if dual(kv)], named, big, list(outs.items())):
+        if pool:
+            n, (t, y) = max(pool, key=lambda kv: float(np.ptp(kv[1][1])))
+            return n, SignalStats(n, t, y), (t, y)
+    return None
 
 
 def _signals_digest(traces) -> str:
