@@ -40,7 +40,7 @@ uvicorn app.main:app --reload
 
 | 变量 | 必填 | 说明 |
 |---|---|---|
-| `CIRCUITPILOT_API_KEY` | 是 | OpenAI 兼容 API Key（也接受 `OPENAI_API_KEY`） |
+| `CIRCUITPILOT_API_KEY` | 是 | OpenAI 兼容 API Key（也接受 `DEEPSEEK_API_KEY` / `OPENAI_API_KEY`） |
 | `CIRCUITPILOT_NGSPICE` | 是(Windows) | ngspice.exe 完整路径；已在 PATH 中可省略 |
 | `CIRCUITPILOT_BASE_URL` | 否 | 默认 DeepSeek `https://api.deepseek.com` |
 | `CIRCUITPILOT_MODEL` | 否 | 默认 `deepseek-chat` |

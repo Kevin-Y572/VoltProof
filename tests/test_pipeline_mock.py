@@ -145,7 +145,7 @@ def main() -> int:
         check("POST /demo/raw 200", r.status_code == 200 and "裸模型" in r.json()["text"])
 
     # ---- 6. 电路图受限执行 ----
-    from app.render_schematic import render_schematic
+    from app.render_schematic import _has_content, render_schematic
     import tempfile
 
     SCH_OK = """import schemdraw
@@ -158,9 +158,11 @@ d.save('schematic.png', dpi=150)
 """
     tmpdir = tempfile.mkdtemp(prefix="cp_sch_test_")
     png = render_schematic(SCH_OK, Path(tmpdir) / "sch.png")
-    check("电路图: 正常代码出 PNG", png is not None and png.exists() and png.stat().st_size > 1000)
+    check("电路图: 正常代码出 PNG 且有内容",
+          png is not None and png.exists() and _has_content(png))
     check("电路图: import os 被拒", render_schematic("import os\nos.system('echo hi')", Path(tmpdir) / "x.png") is None)
     check("电路图: 语法错误被拒", render_schematic("def (", Path(tmpdir) / "y.png") is None)
+    check("电路图: 无 save 被拒", render_schematic("import schemdraw\nd = schemdraw.Drawing()", Path(tmpdir) / "z.png") is None)
 
     print(f"\n{'='*40}\n{'全部通过' if not FAILURES else '失败: ' + ', '.join(FAILURES)}")
     return 1 if FAILURES else 0

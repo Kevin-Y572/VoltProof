@@ -14,7 +14,9 @@ from openai import OpenAI
 
 _BASE_URL = os.environ.get("CIRCUITPILOT_BASE_URL", "https://api.deepseek.com")
 _MODEL = os.environ.get("CIRCUITPILOT_MODEL", "deepseek-chat")
-_API_KEY = os.environ.get("CIRCUITPILOT_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
+_API_KEY = (os.environ.get("CIRCUITPILOT_API_KEY")
+            or os.environ.get("DEEPSEEK_API_KEY")
+            or os.environ.get("OPENAI_API_KEY", ""))
 
 _client: OpenAI | None = None
 

@@ -59,6 +59,9 @@ class SimResult:
                         or any(mk in low for mk in _FATAL_MARKERS)):
                     lines.append(ln)
         text = "\n".join(dict.fromkeys(lines[-15:]))  # 去重保序
+        if not text.strip():
+            # 找不到可执行文件/超时等报错不含关键字，直接透传原始输出尾部
+            text = (self.stderr or self.stdout or "仿真失败，且 stderr/stdout/日志均为空")[-800:]
         return text.strip()[:2000]
 
 
@@ -77,9 +80,10 @@ def run_netlist(netlist_text: str, workdir: str | Path | None = None) -> SimResu
     """写 .cir、跑 ngspice（batch 模式 -b），返回执行结果。"""
     workdir = Path(workdir) if workdir else Path(tempfile.mkdtemp(prefix="circuitpilot_"))
     workdir.mkdir(parents=True, exist_ok=True)
+    for old in workdir.glob("*.raw"):
+        old.unlink()  # 防旧产物污染：workdir 复用时绝不能把上次的 raw 当本次结果
     cir = workdir / "circuit.cir"
     cir.write_text(netlist_text, encoding="utf-8")
-    raw = workdir / "out.raw"
     log_file = workdir / "ngspice.log"
 
     t0 = time.monotonic()
@@ -91,9 +95,11 @@ def run_netlist(netlist_text: str, workdir: str | Path | None = None) -> SimResu
         log = log_file.read_text(encoding="utf-8", errors="replace") if log_file.exists() else ""
         fatal = _fatal_in(proc.stderr, proc.stdout, log)
         ok = proc.returncode == 0 and not fatal
+        # LLM 不一定遵守 out.raw 约名（会写 rc_lpf.raw 之类），按 mtime 取本次产物
+        raws = sorted(workdir.glob("*.raw"), key=lambda p: p.stat().st_mtime)
         return SimResult(
             ok=ok, stdout=proc.stdout, stderr=proc.stderr, log=log,
-            raw_path=raw if raw.exists() else None,
+            raw_path=raws[-1] if raws else None,
             elapsed=time.monotonic() - t0,
         )
     except FileNotFoundError:

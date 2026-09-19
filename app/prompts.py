@@ -97,7 +97,8 @@ SCHEMATIC_SYSTEM = """\
 要求：
 1. 只输出一个 ```python 代码块。
 2. 只用 schemdraw 库，只 import schemdraw 和 schemdraw.elements。
-3. 代码末尾用 d.save('schematic.png', dpi=150) 保存。
+3. 用 d = schemdraw.Drawing(show=False) 创建画布（不要用 with 块），
+   代码末尾用 d.save('schematic.png', dpi=150, transparent=False) 保存。
 4. 元件摆放注意布局：输入在左，输出在右，地在下。
 5. 不使用任何网络、文件读写（除 save）或其他库。
 """

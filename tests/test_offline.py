@@ -140,6 +140,11 @@ def main() -> int:
             check("分压输出≈5V", vout is not None and abs(float(vout[0]) - 5.0) < 0.05,
                   f"v={None if vout is None else float(vout[0]):.3f}")
 
+        # ---- 3d. 自定义 raw 文件名（LLM 常不守 out.raw 约名）也能被发现 ----
+        renamed = run_netlist(AC_NETLIST.replace("out.raw", "my_lpf.raw"), workdir=tmp / "renamed")
+        check("自定义 raw 名被发现", renamed.ok and renamed.raw_path is not None
+              and renamed.raw_path.name == "my_lpf.raw", str(renamed.raw_path))
+
         # ---- 4. 静态检查四类规则 ----
         c1 = checks.run_checks("V1 in x0 DC 5\nR1 in out 1k\nC1 out x0 1u\n.tran 1u 1m\n")
         check("检查器: 缺节点0 报错", any("参考地" in e for e in c1.errors), str(c1.errors))
