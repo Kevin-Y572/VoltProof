@@ -73,11 +73,17 @@ def _b64_png(png: Path) -> str:
 def run_pipeline(request: str, previous_netlist: str | None = None,
                  max_retries: int = MAX_RETRIES,
                  validators: list[Validator] | None = None,
-                 backend: str = "spice") -> Evidence:
+                 backend: str = "spice",
+                 initial_netlist: str | None = None) -> Evidence:
+    """initial_netlist：用户上传的网表——跳过生成环节直接进"检查→仿真→
+    验收→修复"循环（诊断场景），验证通过后同样进入会话状态供后续修改。"""
     ev = Evidence(request=request)
     t0 = time.monotonic()
 
-    if backend == "skidl":
+    if initial_netlist:
+        netlist = initial_netlist
+        ev.retry_log.append({"round": 0, "stage": "attach", "problems": []})
+    elif backend == "skidl":
         netlist = _skidl_track(request, ev)
     else:
         netlist = llm.extract_code_block(
@@ -230,15 +236,35 @@ def get_session(session_id: str | None = None) -> dict:
     return _SESSIONS[sid]
 
 
-def chat_with_session(session_id: str, message: str) -> dict:
+def chat_with_session(session_id: str, message: str,
+                      attachment: dict | None = None) -> dict:
+    """attachment: {filename, content}——网表文件直接作为初始电路，文本文件
+    内容并入需求。"""
     s = get_session(session_id)
-    ev = run_pipeline(message, previous_netlist=s["netlist"])
+    initial_netlist = None
+    if attachment and attachment.get("content"):
+        if _looks_like_netlist(attachment.get("filename", ""), attachment["content"]):
+            initial_netlist = attachment["content"]
+        else:
+            message = f"{message}\n\n[附件 {attachment.get('filename', '')} 的内容]\n{attachment['content'][:4000]}"
+    ev = run_pipeline(message, previous_netlist=initial_netlist or s["netlist"],
+                      initial_netlist=initial_netlist)
     if ev.ok:
         s["netlist"] = ev.netlist  # 只有验证通过的电路才进入会话状态
-    s["history"].append({"user": message, "ok": ev.ok})
+    s["history"].append({"user": message, "ok": ev.ok,
+                         "attachment": attachment and attachment.get("filename")})
     d = ev.to_dict()
     d["session_id"] = s["id"]  # 空入参时客户端也能拿到新建的会话 id
     return d
+
+
+def _looks_like_netlist(filename: str, content: str) -> bool:
+    """扩展名或内容特征判断是否 SPICE 网表。"""
+    if filename.lower().split(".")[-1] in ("cir", "sp", "ckt", "net", "spi", "spice"):
+        return True
+    head = content[:3000].lower()
+    return any(k in head for k in (".tran", ".ac ", ".op", ".model", ".control",
+                                   ".subckt", ".include", ".end"))
 
 
 if __name__ == "__main__":

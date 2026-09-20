@@ -25,6 +25,7 @@ _STATIC = Path(__file__).resolve().parent.parent / "static"
 class ChatReq(BaseModel):
     session_id: str | None = None
     message: str
+    attachment: dict | None = None  # {filename, content}：网表或文本文件
 
 
 class RawReq(BaseModel):
@@ -36,7 +37,7 @@ def chat(req: ChatReq):
     """产品管线：生成 → 检查 → 仿真 → 重试 → 证据。"""
     sid = req.session_id or ""
     try:
-        data = pipeline.chat_with_session(sid, req.message)
+        data = pipeline.chat_with_session(sid, req.message, attachment=req.attachment)
         data["session_id"] = sid or data.get("session_id")
         return data
     except Exception as e:

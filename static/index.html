@@ -45,29 +45,49 @@
     <code onclick="fill('设计一个截止频率1kHz的RC低通滤波器')">RC 低通滤波器</code>
     <code onclick="fill('用理想运放设计一个增益-10倍的反相放大器，仿真验证')">反相放大器</code>
     <code onclick="fill('设计桥式整流+电容滤波电路，220V/50Hz降压到12V，纹波<1V')">整流滤波</code>
+    <span id="chipInfo" style="display:none;margin-top:6px;color:var(--acc)"></span>
   </div>
 </div>
 
 <footer>
+  <input type="file" id="file" accept=".cir,.sp,.ckt,.net,.spi,.spice,.txt,.md" hidden>
+  <button id="attach" title="上传网表或文本文件" style="background:var(--card);border:1px solid var(--line);border-radius:10px;padding:0 14px;font-size:16px;cursor:pointer">📎</button>
   <textarea id="input" rows="1" placeholder="用自然语言描述电路需求…（Enter 发送）"></textarea>
   <button id="send">发送</button>
 </footer>
 
 <script>
 const session_id = crypto.randomUUID().slice(0, 12);
+let attachment = null;  // {filename, content}
 
 function fill(text) { input.value = text; input.focus(); }
 
+attachBtn.addEventListener('click', () => file.click());
+file.addEventListener('change', async () => {
+  const f = file.files[0];
+  if (!f) return;
+  if (f.size > 256 * 1024) { alert('文件过大（>256KB）'); file.value = ''; return; }
+  attachment = { filename: f.name, content: await f.text() };
+  attachBtn.textContent = '📎✓';
+  attachBtn.title = `已附加：${f.name}（点击更换）`;
+  chipInfo.textContent = `附件：${f.name}` + (/\\.(cir|sp|ckt|net|spi|spice)$/i.test(f.name) ? '（将直接仿真验证）' : '（内容并入需求）');
+  chipInfo.style.display = 'block';
+  file.value = '';
+  input.focus();
+});
+
 async function send() {
   const text = input.value.trim();
-  if (!text) return;
+  if (!text && !attachment) return;
+  const att = attachment;
   input.value = ""; send_.disabled = true;
-  addMsg('user', text);
+  attachment = null; attachBtn.textContent = '📎'; chipInfo.style.display = 'none';
+  addMsg('user', text + (att ? ` <span style="color:var(--acc)">📎${escapeHtml(att.filename)}</span>` : ''));
   const holder = addMsg('assistant', '<span style="color:var(--dim)">仿真验证中…（生成网表 → ngspice 执行 → 指标计算）</span>');
   try {
     const r = await fetch('/chat', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({session_id, message: text})
+      body: JSON.stringify({session_id, message: text || '请仿真验证附件电路', attachment: att})
     });
     const d = await r.json();
     if (d.error) holder.innerHTML = `<div class="evidence"><div class="verdict fail">出错了</div>${d.error}</div>`;
@@ -117,6 +137,7 @@ function escapeHtml(s) {
 }
 
 const input = document.getElementById('input'), send_ = document.getElementById('send'), chat = document.getElementById('chat');
+const attachBtn = document.getElementById('attach'), file = document.getElementById('file'), chipInfo = document.getElementById('chipInfo');
 input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
 send_.addEventListener('click', send);
 </script>

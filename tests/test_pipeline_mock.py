@@ -155,6 +155,19 @@ def main() -> int:
     check("验收环: 最终 checks 全过", ev.ok and all(c["ok"] for c in ev.checks))
     check("验收环: Evidence 带验收明细", len(ev.checks) == 1 and ev.checks[0]["ok"])
 
+    # ---- 4c. 附件网表：跳过生成直接进仿真（诊断场景） ----
+    pipeline._SESSIONS.clear()
+    with patch.object(llm, "chat", Scripted(["附件电路解读：实测-3dB约1kHz。"])) as sc_att:
+        d_att = pipeline.chat_with_session("att-1", "帮我仿真验证这个电路", attachment={
+            "filename": "my.cir", "content": GOOD.replace("```spice\n", "").replace("\n```", "")})
+    check("附件: 网表直接仿真通过", d_att["ok"] is True, str(d_att.get("retry_log")))
+    check("附件: 零次生成调用（跳过 LLM 生成）", len(sc_att.calls) == 1, f"{len(sc_att.calls)} 次")
+    check("附件: 网表进入会话状态", pipeline._SESSIONS["att-1"]["netlist"] is not None)
+    check("附件: 文本附件并入需求",
+          pipeline._looks_like_netlist("note.txt", "设计一个放大器") is False
+          and pipeline._looks_like_netlist("a.cir", "任意") is True
+          and pipeline._looks_like_netlist("x.txt", "* cir\n.tran 1u 1m") is True)
+
     # ---- 5. FastAPI 接口 ----
     from fastapi.testclient import TestClient
     from app.main import app
