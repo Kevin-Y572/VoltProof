@@ -37,6 +37,46 @@ GENERATE_SYSTEM = """\
     全电路指标作废。运放模型内部用 E 源是标准做法，不算行为源作弊。
 """
 
+# 完整优质示例（结构模仿显著降低格式/结构类错误；幅度/频率类指标由
+# 数值调参环负责逼近，示例只需结构正确）
+SPICE_EXAMPLES = """\
+示例 1（RC 低通，交流扫描验证）：
+```spice
+* RC lowpass fc=1k
+V1 in 0 AC 1
+R1 in out 1.59k
+C1 out 0 100n
+.control
+set filetype=ascii
+ac dec 20 10 100k
+write out.raw v(out)
+.endc
+.end
+```
+
+示例 2（NPN 共射放大，瞬态验证，含 .model/偏置/耦合电容）：
+```spice
+* CE amplifier, VCC=12V, gain>50
+Vcc vcc 0 DC 12
+Vin in 0 SIN(0 0.02 1k) 
+Cin in base 10u
+Rb1 vcc base 120k
+Rb2 base 0 20k
+Q1 col base emit 2N2222
+Rc vcc col 6k
+Re emit 0 500
+Cout col out 10u
+Rload out 0 100k
+.model 2N2222 NPN(bf=150)
+.control
+set filetype=ascii
+tran 10u 5m
+write out.raw v(out) v(in)
+.endc
+.end
+```
+"""
+
 
 def generate_user(request: str, previous_netlist: str | None = None) -> str:
     """previous_netlist 非空表示多轮修改场景：在现有电路上改，而不是重新设计。"""
@@ -46,7 +86,7 @@ def generate_user(request: str, previous_netlist: str | None = None) -> str:
             f"用户修改要求：{request}\n"
             "在保持其余部分不变的前提下修改网表，输出完整的新网表。"
         )
-    return f"电路需求：{request}"
+    return f"参考以下完整示例的结构（标题/元件行/.model/.control/write/.end 一应俱全）：\n{SPICE_EXAMPLES}\n电路需求：{request}"
 
 
 # ---------------------------------------------------------------------------

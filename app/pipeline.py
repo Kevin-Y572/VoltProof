@@ -97,6 +97,7 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
         ev.retry_log.append({"round": 0, "stage": "generate", "problems": []})
 
     tune_history: list[str] = []  # 验收环的调参历史（每轮实测记录，跨轮累积）
+    numeric_tunes = 0             # 数值调参次数上限：线性近似不成立时及时回退 LLM
     for rnd in range(max_retries + 1):
         if not netlist:  # skidl 轨构建彻底失败（日志已在 _skidl_track 里）
             break
@@ -156,9 +157,21 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
                 ev.retry_log.append({"round": rnd, "stage": "verify", "problems": problems})
                 if rnd == max_retries:
                     break
-                # 调参历史让 LLM 看到之前每轮的实测结果，避免来回摆动不收敛
-                tune_history.append(f"第 {rnd + 1} 轮实测未达标：" + "；".join(problems)[:400])
-                netlist = _tune(request, netlist, problems, history=tune_history)
+                # 优先程序化数值调参（确定性收敛）：判分层输出的 tune_hint
+                # 直接改源幅度/频率；无可执行项才回退 LLM 全量调参
+                hints = [c.get("tune_hint") for c in fails if c.get("tune_hint")]
+                tuned_nl, note = ("", "")
+                if hints and numeric_tunes < 3:
+                    from .tuner import numeric_tune
+                    tuned_nl, note = numeric_tune(netlist, hints)
+                    if tuned_nl:
+                        numeric_tunes += 1
+                if tuned_nl:
+                    tune_history.append(f"第 {rnd + 1} 轮（数值调参）：{note}")
+                    netlist = tuned_nl
+                else:
+                    tune_history.append(f"第 {rnd + 1} 轮实测未达标：" + "；".join(problems)[:400])
+                    netlist = _tune(request, netlist, problems, history=tune_history)
                 continue
 
         # ---- 全部通过：解读、电路图 ----

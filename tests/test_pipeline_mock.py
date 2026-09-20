@@ -168,6 +168,38 @@ def main() -> int:
           and pipeline._looks_like_netlist("a.cir", "任意") is True
           and pipeline._looks_like_netlist("x.txt", "* cir\n.tran 1u 1m") is True)
 
+    # ---- 4d. 数值调参：tune_hint 走确定性路径，不调 LLM 调参 ----
+    SIN_NL = """```spice
+* sine test for numeric tuning
+V1 in 0 SIN(0 1 1k)
+R1 in out 1k
+R2 out 0 1k
+.control
+set filetype=ascii
+tran 5u 10m
+write out.raw v(out)
+.endc
+.end
+```"""
+    calls2 = {"n": 0}
+
+    def hint_validator(ev, tr):
+        calls2["n"] += 1
+        if calls2["n"] == 1:
+            return [{"name": "幅度", "ok": False, "detail": "vpp=1.0V（目标 2V）",
+                     "tune_hint": {"kind": "vpp", "measured": 1.0, "target": 2.0, "freq": 1000}}]
+        return [{"name": "幅度", "ok": True, "detail": "vpp=2.0V"}]
+
+    with patch.object(llm, "chat", Scripted([SIN_NL, "数值调参后解读。"])) as sc_num:
+        ev_num = pipeline.run_pipeline("test", validators=[hint_validator])
+    stages_num = [r["stage"] for r in ev_num.retry_log]
+    check("数值调参: verify 轮存在", "verify" in stages_num, str(stages_num))
+    check("数值调参: 零 LLM 调参调用（确定性路径，仅 1 次生成+1 次解读）",
+          len(sc_num.calls) == 2, f"{len(sc_num.calls)} 次调用")
+    check("数值调参: 网表 SIN 幅度被确定性修改",
+          "SIN(0 2 " in ev_num.netlist, ev_num.netlist.splitlines()[1] if len(ev_num.netlist.splitlines()) > 1 else "")
+    check("数值调参: 最终通过", ev_num.ok)
+
     # ---- 5. FastAPI 接口 ----
     from fastapi.testclient import TestClient
     from app.main import app

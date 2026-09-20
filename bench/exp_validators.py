@@ -97,10 +97,18 @@ def validator_exp1(ev, tr) -> list[dict]:
         res.append(_not_found(f"存在{missing}正弦输出", tr))
         return res
     (n1, st1, (t1, y1)), (n3, st3, (t3, y3)) = s1, s3
-    res.append(_ck("1kHz 频率", _near(st1.f0, 1000, 0.02), f"实测 {st1.f0:.1f}Hz"))
-    res.append(_ck("1kHz 峰峰值≈6V", _near(st1.vpp, 6, 0.15), f"实测 vpp={st1.vpp:.3f}V（目标 6V±15%）"))
-    res.append(_ck("3kHz 频率", _near(st3.f0, 3000, 0.02), f"实测 {st3.f0:.1f}Hz"))
-    res.append(_ck("3kHz 峰峰值≈2V", _near(st3.vpp, 2, 0.15), f"实测 vpp={st3.vpp:.3f}V（目标 2V±15%）"))
+    res.append({**_ck("1kHz 频率", _near(st1.f0, 1000, 0.02), f"实测 {st1.f0:.1f}Hz"),
+                **({"tune_hint": {"kind": "freq", "measured": st1.f0, "target": 1000, "freq": st1.f0}}
+                   if not _near(st1.f0, 1000, 0.02) else {})})
+    res.append({**_ck("1kHz 峰峰值≈6V", _near(st1.vpp, 6, 0.15), f"实测 vpp={st1.vpp:.3f}V（目标 6V±15%）"),
+                **({"tune_hint": {"kind": "vpp", "measured": st1.vpp, "target": 6, "freq": st1.f0}}
+                   if not _near(st1.vpp, 6, 0.15) else {})})
+    res.append({**_ck("3kHz 频率", _near(st3.f0, 3000, 0.02), f"实测 {st3.f0:.1f}Hz"),
+                **({"tune_hint": {"kind": "freq", "measured": st3.f0, "target": 3000, "freq": st3.f0}}
+                   if not _near(st3.f0, 3000, 0.02) else {})})
+    res.append({**_ck("3kHz 峰峰值≈2V", _near(st3.vpp, 2, 0.15), f"实测 vpp={st3.vpp:.3f}V（目标 2V±15%）"),
+                **({"tune_hint": {"kind": "vpp", "measured": st3.vpp, "target": 2, "freq": st3.f0}}
+                   if not _near(st3.vpp, 2, 0.15) else {})})
     # THD 用产品指标（extract_metrics 已算好，名字带信号名）
     for n, st, tgt in ((n1, st1, "1kHz"), (n3, st3, "3kHz")):
         thd = ev.metrics.get(f"{n}_thd")
@@ -161,8 +169,10 @@ def validator_exp2(ev, tr) -> list[dict]:
     a3 = st.harmonic(t, y, 3000)
     res.append(_ck("含明显3次谐波(方波特征)", a3 > 0.05 * a1,
                    f"a3/a1={a3 / max(a1, 1e-9):.3f}（理想 1/3）"))
-    res.append(_ck("合成幅度≈5V", _near(st.vpp, 5, 0.2),
-                   f"实测 vpp={st.vpp:.3f}V（目标 5V±20%）"))
+    res.append({**_ck("合成幅度≈5V", _near(st.vpp, 5, 0.2),
+                       f"实测 vpp={st.vpp:.3f}V（目标 5V±20%）"),
+                **({"tune_hint": {"kind": "vpp", "measured": st.vpp, "target": 5, "freq": st.f0}}
+                   if not _near(st.vpp, 5, 0.2) else {})})
     return res
 
 

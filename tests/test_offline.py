@@ -289,6 +289,25 @@ print("OUT_NODES: v(OUT)")
         png3 = render_netlist_schematic(EXP3_NL, tmp / "sch_exp3.png", title="exp3")
         check("布局: 多端元件(X)+子电路 网表渲染成功", png3 is not None and png3.exists())
 
+        # ---- 8. 程序化数值调参（tune_hint → 确定性改源幅度/频率）----
+        from app.tuner import numeric_tune
+
+        NL2 = ("* synth\nV1 a 0 SIN(0 1 1000)\nV2 b 0 SIN(0 0.33 3000)\n"
+               "R1 a sum 10k\nR2 b sum 30k\n.end\n")
+        tuned, note = numeric_tune(NL2, [
+            {"kind": "vpp", "measured": 2.5, "target": 5.0, "freq": 1000},
+            {"kind": "freq", "measured": 950.0, "target": 1000.0, "freq": 950.0},
+        ])
+        check("tuner: 返回新网表", tuned is not None, note)
+        if tuned:
+            l1 = [ln for ln in tuned.splitlines() if ln.startswith("V1")][0]
+            l2 = [ln for ln in tuned.splitlines() if ln.startswith("V2")][0]
+            check("tuner: 1kHz 源幅度按比例缩放", "SIN(0 2 " in l1, l1)
+            check("tuner: 偏差源频率被校正（3000 源不动）", "3000" in l2 or "3157" in l2, l2)
+        tuned2, _ = numeric_tune("* osc\nVcc vcc 0 12\nQ1 a b c m\n.model m NPN\n.end\n",
+                                 [{"kind": "vpp", "measured": 3, "target": 6, "freq": 1000}])
+        check("tuner: 无匹配 SIN 源时返回 None（回退 LLM）", tuned2 is None)
+
         print(f"\n{'='*40}\n{'全部通过' if not FAILURES else '失败: ' + ', '.join(FAILURES)}")
     return 1 if FAILURES else 0
 
