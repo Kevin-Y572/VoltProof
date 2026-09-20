@@ -163,12 +163,17 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
             prompts.interpret_user(request, netlist, ev.metrics or {"提示": "未解析到波形数据"}),
         )
 
-        # 电路原理图（W4）：LLM 生成 schemdraw 代码，受限执行，失败静默降级为网表
+        # 电路原理图：优先确定性自动布局（网表→graphviz 坐标→按位渲染），
+        # 失败才回退 LLM 生成 schemdraw 代码的老路
         try:
-            code = llm.extract_code_block(
-                llm.chat(prompts.SCHEMATIC_SYSTEM, prompts.schematic_user(netlist))
-            )
-            png = render_schematic(code, OUT_DIR / "schematic.png")
+            from .schematic_layout import render_netlist_schematic
+            png = render_netlist_schematic(netlist, OUT_DIR / "schematic.png",
+                                           title=request[:24])
+            if png is None:
+                code = llm.extract_code_block(
+                    llm.chat(prompts.SCHEMATIC_SYSTEM, prompts.schematic_user(netlist))
+                )
+                png = render_schematic(code, OUT_DIR / "schematic.png")
             if png:
                 ev.schematic_b64 = _b64_png(png)
         except Exception:

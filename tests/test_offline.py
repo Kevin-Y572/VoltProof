@@ -271,6 +271,24 @@ print("OUT_NODES: v(OUT)")
         nl_bad, _err = skidl_build("import os\nos.system('echo hi')")
         check("skidl: import os 被拒", nl_bad is None)
 
+        # ---- 7. 确定性原理图布局（graphviz dot + schemdraw 按位渲染）----
+        from app.schematic_layout import parse_to_graph, render_netlist_schematic
+
+        g = parse_to_graph(RC_NETLIST)
+        check("布局: RC 网表解析 3 元件", len(g) == 3 and g[0].name == "V1"
+              and g[1].nets == ["in", "out"], str([(e.name, e.nets) for e in g]))
+        for nm, nl in [("rc", RC_NETLIST), ("op", OP_NETLIST)]:
+            png = render_netlist_schematic(nl, tmp / f"sch_{nm}.png", title=nm)
+            check(f"布局: {nm} 渲染出有内容的图",
+                  png is not None and png.exists() and png.stat().st_size > 8000,
+                  str(png))
+        EXP3_NL = ("* synth\nV1 n1 0 DC 0 SIN(0 1 1000)\nV2 n2 0 DC 0 SIN(0 0.33 3000)\n"
+                   "R1 n1 sum 10k\nR2 n2 sum 30k\nRf sum out 10k\n"
+                   "X1 sum 0 out vcc vee opamp\nVcc vcc 0 12\n"
+                   ".subckt opamp a b c p m\nE1 c 0 a b 100000\n.ends\n.end\n")
+        png3 = render_netlist_schematic(EXP3_NL, tmp / "sch_exp3.png", title="exp3")
+        check("布局: 多端元件(X)+子电路 网表渲染成功", png3 is not None and png3.exists())
+
         print(f"\n{'='*40}\n{'全部通过' if not FAILURES else '失败: ' + ', '.join(FAILURES)}")
     return 1 if FAILURES else 0
 

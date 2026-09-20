@@ -53,6 +53,18 @@ python bench/run_exp.py --backend=skidl     # 综合实验（证据 bench/exp_sk
 （a3/a1=0.330≈1/3、a5/a1=0.193≈0.2）。协议合规：实测 skidl 2.3.0 的
 `skidl.pyspice` 原语不加载 PySpice（GPL）。
 
+## 原理图：确定性自动布局（2026-09 升级）
+
+原路线"LLM 生成 schemdraw 代码"在复杂电路上布局崩坏（坐标靠语言模型想象）。
+现改为确定性管线：**网表 → 二部图 → graphviz dot 布局（rankdir=LR，
+地沉底/电源置顶）→ schemdraw 按坐标渲染**，LLM 退出画图环节。
+
+- `app/schematic_layout.py`：`render_netlist_schematic(netlist, png)`；
+  两端元件 `.at(netA).to(netB)` 精确落位，多端元件（Q/M/X）画 IC 方框+
+  引脚连线，拓扑 100% 正确；dot 不可用时回退纯 Python 网格布局
+- pipeline 优先确定性渲染，失败才回退 LLM 老路（省一次 LLM 调用）
+- graphviz 是 EPL-1.0，子进程调用（与 ngspice 同哲学），无协议传染
+
 环境变量一览：
 
 | 变量 | 必填 | 说明 |
