@@ -108,8 +108,11 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
                                  "problems": ["连续修复失败，换一种电路架构重新生成"]})
             netlist = llm.extract_code_block(
                 llm.chat(prompts.GENERATE_SYSTEM,
-                         prompts.generate_user(request, previous_netlist), temperature=0.5)
+                         prompts.generate_user(request, previous_netlist),
+                         temperature=0.5, thinking=False)
             )
+            # 换架构重启要快且求多样：官方文档明确思考模式下 temperature 被静默
+            # 忽略——关思考后 temperature=0.5 才真正生效，也不再每轮苦等长思考
             llm_fix_fails = 0
             continue
         # ---- 静态检查 ----
@@ -194,6 +197,7 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
         ev.interpretation = llm.chat(
             prompts.INTERPRET_SYSTEM,
             prompts.interpret_user(request, netlist, ev.metrics or {"提示": "未解析到波形数据"}),
+            thinking=False,  # 轻量总结任务：关思考省下分钟级等待（官方支持按调用关闭）
         )
 
         # 电路原理图：优先确定性自动布局（网表→graphviz 坐标→按位渲染），

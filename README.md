@@ -20,7 +20,7 @@ pip install -r requirements.txt
 
 # 3. 配置模型（OpenAI 兼容接口，默认 DeepSeek）
 setx CIRCUITPILOT_API_KEY 你的key         # Git Bash 会话内用 export（setx 对已开终端不生效）
-setx CIRCUITPILOT_MODEL deepseek-chat      # 可选，默认即此
+setx CIRCUITPILOT_MODEL deepseek-flash     # 可选，默认即 deepseek-flash
 setx CIRCUITPILOT_BASE_URL https://api.deepseek.com   # 可选
 
 # 4. 离线自检（不需要 API Key，验证仿真链路/检查器/重试循环/接口契约）
@@ -90,8 +90,25 @@ python bench/run_exp.py --backend=skidl     # 综合实验（证据 bench/exp_sk
 | `CIRCUITPILOT_API_KEY` | 是 | OpenAI 兼容 API Key（也接受 `DEEPSEEK_API_KEY` / `OPENAI_API_KEY`） |
 | `CIRCUITPILOT_NGSPICE` | 是(Windows) | ngspice.exe 完整路径；已在 PATH 中可省略 |
 | `CIRCUITPILOT_BASE_URL` | 否 | 默认 DeepSeek `https://api.deepseek.com` |
-| `CIRCUITPILOT_MODEL` | 否 | 默认 `deepseek-flash`（推理型：思考放 reasoning_content，重任务思考 1-13 分钟，谐波类精度极佳；换 `deepseek-chat` 快 10 倍） |
+| `CIRCUITPILOT_MODEL` | 否 | 默认 `deepseek-flash`（推理型：思考放 reasoning_content，重任务思考 1-13 分钟，谐波类精度极佳；换 `deepseek-v4-pro` 走高端档） |
 | `CIRCUITPILOT_LLM_TIMEOUT` | 否 | 单次调用超时秒数，默认 480 |
+| `CIRCUITPILOT_LLM_RETRIES` | 否 | SDK 对超时/断连/429/5xx 的自动退避重试次数，默认 2 |
+| `CIRCUITPILOT_THINKING` | 否 | 思考模式总开关 on/off，默认 on；调用处可用 `thinking=` 参数按次覆盖 |
+| `CIRCUITPILOT_REASONING_EFFORT` | 否 | none/low/high/max（别名 minimal/medium/xhigh 按官方映射表归一），默认不传（服务端 high） |
+
+## LLM 调用模块（app/llm.py，对齐 DeepSeek 官方文档）
+
+- **思考模式**：官方默认开启（effort=high），`chat(..., thinking=False)` 按次关闭；
+  思考开启时不下发 temperature——官方文档明确思考模式下 temperature 被静默忽略。
+  解读、修复环重启等轻量/求快调用已按次关闭思考。
+- **JSON 模式**：`chat_json()` 启用 `response_format=json_object`，自动补官方要求的
+  prompt "json" 字样、空 content 自动重试、`finish_reason=length` 报截断错。
+- **流式**：`chat_stream()` 按 delta 分流累计 reasoning_content 与 content，
+  `include_usage` 取回末块用量（服务于 W3 的 SSE 演示 TODO）。
+- **错误翻译**：401/402/422/429/500/503 按官方错误码表翻译成中文 `LLMError`；
+  429=账号级并发超限（flash 2500 / pro 500），传输类错误由 SDK 指数退避重试。
+- **用量观测**：`llm.last_usage` 记录 `prompt_cache_hit_tokens` 等（上下文硬盘缓存
+  命中价约为未命中 1/50；system 固定在最前以稳定前缀提高命中）。
 
 ## 实测经验（Windows + ngspice-47，踩坑记录）
 

@@ -78,7 +78,7 @@ class Scripted:
         self.responses = list(responses)
         self.calls: list[tuple[str, str]] = []
 
-    def __call__(self, system: str, user: str, temperature: float = 0.2) -> str:
+    def __call__(self, system: str, user: str, temperature: float = 0.2, **kw) -> str:
         self.calls.append((system, user))
         return self.responses.pop(0)
 
@@ -135,7 +135,7 @@ def main() -> int:
 
     tune_calls: list[str] = []
 
-    def fake_chat(system, user, temperature=0.2):
+    def fake_chat(system, user, temperature=0.2, **kw):
         if "调参专家" in system:
             tune_calls.append(user)
             return GOOD.replace("AC 1", "AC 2")  # 调参后的网表
@@ -206,7 +206,7 @@ write out.raw v(out)
     orig_chat = sc3
 
     class ScriptedT(Scripted):
-        def __call__(self, system, user, temperature=0.2):
+        def __call__(self, system, user, temperature=0.2, **kw):
             if "电路设计专家" in system:  # GENERATE_SYSTEM
                 gen_calls.append(temperature)
             return super().__call__(system, user, temperature)

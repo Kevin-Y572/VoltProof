@@ -19,3 +19,5 @@ bench/exp_run.log
 skidl.erc
 skidl.log
 bench/exp_skidl/
+bench/regress_out/
+bench/external/

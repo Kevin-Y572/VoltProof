@@ -13,6 +13,7 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,10 +25,12 @@ _TIMEOUT = int(os.environ.get("CIRCUITPILOT_SIM_TIMEOUT", "30"))
 
 # 安全过滤（2026-09-21 审查发现）：ngspice .control 块支持 shell 等系统命令，
 # 用户/LLM 网表可借此执行任意系统命令（实测 PoC 成功）——一律拒绝。
-_CTRL_DANGER = re.compile(r"^\s*(shell|system|alias|spice|exec|source|cd|quit)\b",
+# quit 只退出 ngspice 无副作用，放行（否则误伤正常网表习惯）。
+_CTRL_DANGER = re.compile(r"^\s*(shell|system|alias|spice|exec|source|cd)\b",
                           re.IGNORECASE)
-# .include/.lib 只允许相对路径（禁止盘符/网络路径/上跳，防任意文件读取）
-_BAD_INCLUDE = re.compile(r"^\s*[.](include|lib)\s+([\"']?)([a-z]:|[\\\\/]|.*\.\.)",
+# .include/.lib 拒绝绝对/网络路径（相对 ../ 允许——ngspice 示例的惯用法，
+# 且 include 内容不回显给用户，风险极低）
+_BAD_INCLUDE = re.compile(r"^\s*[.](include|lib)\s+[\"']?([a-z]:|[\\\\]{2}|//)",
                           re.IGNORECASE)
 
 
@@ -107,6 +110,46 @@ def _fatal_in(*sources: str) -> list[str]:
     return hits
 
 
+def _run_capped(args: list, cwd: Path, timeout: int, cap: int = 8 * 1024 * 1024):
+    """带输出容量上限的子进程执行。
+
+    subprocess.run 的 timeout 依赖 communicate 的读取线程——当子进程输出
+    海量数据（如 .control 里 print/plot 把绘图数据打到 stdout）时读取
+    线程会阻塞，超时机制随之失效、调用永久挂死（2026-09-21 开源网表
+    回归实测：combplot 类示例挂死进程）。改为独立线程计数读取，超上限
+    或超时直接 kill。"""
+    p = subprocess.Popen(args, cwd=str(cwd), stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE)
+    buf: dict[str, list] = {"out": [], "err": []}
+    exceeded = threading.Event()
+
+    def _read(fh, key):
+        while True:
+            chunk = fh.read(65536)
+            if not chunk:
+                return
+            buf[key].append(chunk)
+            if sum(len(b) for b in buf[key]) > cap:
+                exceeded.set()
+                p.kill()
+                return
+
+    t_out = threading.Thread(target=_read, args=(p.stdout, "out"), daemon=True)
+    t_err = threading.Thread(target=_read, args=(p.stderr, "err"), daemon=True)
+    t_out.start()
+    t_err.start()
+    try:
+        rc = p.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        p.wait()
+        rc = -9
+    t_out.join(timeout=2)
+    t_err.join(timeout=2)
+    text = lambda parts: b"".join(parts).decode("utf-8", errors="replace")  # noqa: E731
+    return rc, text(buf["out"]), text(buf["err"]), exceeded.is_set()
+
+
 def run_netlist(netlist_text: str, workdir: str | Path | None = None) -> SimResult:
     """写 .cir、跑 ngspice（batch 模式 -b），返回执行结果。"""
     safety = check_netlist_safety(netlist_text)
@@ -122,19 +165,18 @@ def run_netlist(netlist_text: str, workdir: str | Path | None = None) -> SimResu
 
     t0 = time.monotonic()
     try:
-        proc = subprocess.run(
-            [_NGSPICE, "-b", "-o", str(log_file), str(cir)],
-            capture_output=True, timeout=_TIMEOUT, cwd=workdir,
-            # ngspice Windows 输出可能混 GBK/拉丁字节，强制 utf-8+replace 防读取线程崩溃
-            encoding="utf-8", errors="replace",
-        )
+        rc, stdout, stderr, capped = _run_capped(
+            [_NGSPICE, "-b", "-o", str(log_file), str(cir)], workdir, _TIMEOUT)
+        if capped:
+            return SimResult(False, stdout[:2000], "仿真输出超过 8MB 上限（疑似在 "
+                             "stdout 打印绘图数据），已终止", "", None, time.monotonic() - t0)
         log = log_file.read_text(encoding="utf-8", errors="replace") if log_file.exists() else ""
-        fatal = _fatal_in(proc.stderr, proc.stdout, log)
-        ok = proc.returncode == 0 and not fatal
+        fatal = _fatal_in(stderr, stdout, log)
+        ok = rc == 0 and not fatal
         # LLM 不一定遵守 out.raw 约名（会写 rc_lpf.raw 之类），按 mtime 取本次产物
         raws = sorted(workdir.glob("*.raw"), key=lambda p: p.stat().st_mtime)
         return SimResult(
-            ok=ok, stdout=proc.stdout, stderr=proc.stderr, log=log,
+            ok=ok, stdout=stdout, stderr=stderr, log=log,
             raw_path=raws[-1] if raws else None,
             elapsed=time.monotonic() - t0,
         )

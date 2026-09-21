@@ -237,6 +237,168 @@ def main() -> int:
               llm.extract_code_block("说明\n```spice\n* t\nV1 1 0 5\n```\n尾") == "* t\nV1 1 0 5")
         check("无 code block 原样返回", llm.extract_code_block("* plain") == "* plain")
 
+        # ---- 5b. LLM 封装层（DeepSeek 官方文档行为，stub 客户端，零网络） ----
+        from types import SimpleNamespace as NS
+
+        import httpx
+        import openai as openai_mod
+
+        def _mk_client(captured, resp=None, err=None):
+            def create(**kw):
+                captured.update(kw)
+                if err is not None:
+                    raise err
+                return resp
+            return NS(chat=NS(completions=NS(create=create)))
+
+        def _usage_ns():
+            return NS(prompt_tokens=100, completion_tokens=7, total_tokens=107,
+                      prompt_cache_hit_tokens=64, prompt_cache_miss_tokens=36,
+                      completion_tokens_details=NS(reasoning_tokens=1024))
+
+        old_client = llm._client
+        cap: dict = {}
+        try:
+            resp_ok = NS(choices=[NS(finish_reason="stop",
+                                     message=NS(content="网表内容", reasoning_content=""))],
+                         usage=_usage_ns())
+            llm._client = _mk_client(cap, resp=resp_ok)
+
+            # 思考默认开启（官方默认）：thinking=enabled 且不下发 temperature
+            out = llm.chat("sys", "usr")
+            check("llm: 默认思考开启且不下发 temperature",
+                  out == "网表内容"
+                  and cap["extra_body"] == {"thinking": {"type": "enabled"}}
+                  and "temperature" not in cap, str(cap.get("extra_body")))
+            check("llm: usage 统计（KV 缓存命中 + 思考 token）",
+                  llm.last_usage.get("prompt_cache_hit_tokens") == 64
+                  and llm.last_usage.get("prompt_cache_miss_tokens") == 36
+                  and llm.last_usage.get("reasoning_tokens") == 1024)
+
+            # 关思考：temperature 真正下发（官方：思考模式下被静默忽略）
+            llm.chat("sys", "usr", temperature=0.5, thinking=False)
+            check("llm: 关思考时下发 temperature",
+                  cap["temperature"] == 0.5
+                  and cap["extra_body"]["thinking"]["type"] == "disabled")
+
+            # reasoning_effort 官方别名映射（minimal→low / medium→high）
+            llm.chat("sys", "usr", reasoning_effort="medium")
+            check("llm: reasoning_effort 别名归一 medium->high",
+                  cap.get("reasoning_effort") == "high")
+            try:
+                llm.chat("sys", "usr", reasoning_effort="ultra")
+                check("llm: 非法 effort 被拒", False)
+            except ValueError:
+                check("llm: 非法 effort 被拒", True)
+
+            # user_id 官方格式校验（限速隔离用，[A-Za-z0-9_-]{1,512}）
+            try:
+                llm.chat("sys", "usr", user_id="带空格的 id")
+                check("llm: 非法 user_id 被拒", False)
+            except ValueError:
+                check("llm: 非法 user_id 被拒", True)
+            llm.chat("sys", "usr", user_id="circuit-pilot_01")
+            check("llm: 合法 user_id 经 extra_body 下发",
+                  cap["extra_body"].get("user_id") == "circuit-pilot_01")
+
+            # 空 content 回落含代码块的 reasoning_content（推理模型实测行为）
+            llm._client = _mk_client(cap, resp=NS(
+                choices=[NS(finish_reason="stop",
+                            message=NS(content="", reasoning_content="想过了```V1 1 0 5```"))],
+                usage=None))
+            check("llm: 空 content 回落含代码块的 reasoning",
+                  llm.chat("sys", "usr") == "想过了```V1 1 0 5```")
+
+            # 官方错误码 -> 中文解释（402 余额不足 / 429 并发超限）
+            def _status_err(code, msg):
+                r = httpx.Response(code, request=httpx.Request(
+                    "POST", "https://api.deepseek.com/chat/completions"))
+                return openai_mod.APIStatusError(msg, response=r, body=None)
+
+            llm._client = _mk_client(cap, err=_status_err(402, "Insufficient Balance"))
+            try:
+                llm.chat("sys", "usr")
+                check("llm: 402 报 LLMError 并提示余额", False)
+            except llm.LLMError as e:
+                check("llm: 402 报 LLMError 并提示余额", "余额" in str(e), str(e))
+            llm._client = _mk_client(cap, err=_status_err(429, "Concurrency Limit"))
+            try:
+                llm.chat("sys", "usr")
+                check("llm: 429 提示并发超限", False)
+            except llm.LLMError as e:
+                check("llm: 429 提示并发超限", "并发" in str(e), str(e))
+
+            # JSON 模式（官方指南：须含 json 字样 / 截断报错 / 空 content 重试）
+            llm._client = _mk_client(cap, resp=NS(
+                choices=[NS(finish_reason="stop",
+                            message=NS(content='{"fc_hz": 1000}', reasoning_content=""))],
+                usage=None))
+            check("llm: JSON 模式解析成功",
+                  llm.chat_json("输出 json", '求截止频率，示例 {"fc_hz": 1000}')
+                  == {"fc_hz": 1000})
+
+            llm._client = _mk_client(cap, resp=NS(
+                choices=[NS(finish_reason="stop",
+                            message=NS(content='{"fc_hz": 1000}', reasoning_content=""))],
+                usage=None))
+            llm.chat_json("系统提示", "用户问题（完全没提那个词）")
+            check("llm: prompt 缺 json 字样时自动补",
+                  "json" in cap["messages"][1]["content"].lower()
+                  and cap.get("response_format") == {"type": "json_object"})
+
+            llm._client = _mk_client(cap, resp=NS(
+                choices=[NS(finish_reason="length",
+                            message=NS(content='{"fc_hz": 10', reasoning_content=""))],
+                usage=None))
+            try:
+                llm.chat_json("输出 json", '求 {"fc_hz": 1000}')
+                check("llm: 截断报截断错（finish_reason=length）", False)
+            except llm.LLMError as e:
+                check("llm: 截断报截断错（finish_reason=length）", "截断" in str(e), str(e))
+
+            seq = {"n": 0}
+
+            def _flaky_json(**kw):
+                seq["n"] += 1
+                content = "" if seq["n"] == 1 else '{"ok": 1}'
+                return NS(choices=[NS(finish_reason="stop",
+                                      message=NS(content=content, reasoning_content=""))],
+                          usage=None)
+
+            llm._client = NS(chat=NS(completions=NS(create=_flaky_json)))
+            check("llm: JSON 空 content 自动重试一次",
+                  llm.chat_json("输出 json", "x") == {"ok": 1} and seq["n"] == 2)
+
+            # 流式：reasoning 与 content 分流累计（官方 delta 分流示例）+ 末块 usage
+            def _stream_create(**kw):
+                cap.update(kw)
+                return iter([
+                    NS(choices=[], usage=None),
+                    NS(choices=[NS(finish_reason=None,
+                                   delta=NS(content=None, reasoning_content="思考中"))],
+                       usage=None),
+                    NS(choices=[NS(finish_reason=None,
+                                   delta=NS(content="你好", reasoning_content=None))],
+                       usage=None),
+                    NS(choices=[NS(finish_reason="stop",
+                                   delta=NS(content=None, reasoning_content=None))],
+                       usage=_usage_ns()),
+                ])
+
+            llm._client = NS(chat=NS(completions=NS(create=_stream_create)))
+            got = list(llm.chat_stream("s", "u", yield_reasoning=True))
+            text = "".join(t for k, t in got if k == "content")
+            reasoning = "".join(t for k, t in got if k == "reasoning")
+            check("llm: 流式 content/reasoning 分流累计",
+                  text == "你好" and reasoning == "思考中"
+                  and cap.get("stream") is True
+                  and cap.get("stream_options") == {"include_usage": True},
+                  str(got))
+            check("llm: 流式 usage 取自末块",
+                  llm.last_usage.get("prompt_cache_hit_tokens") == 64)
+        finally:
+            llm._client = old_client
+
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -329,7 +491,11 @@ print("OUT_NODES: v(OUT)")
                     "shell echo PWNED > C:/pwned.txt\nop\n.endc\n.end")
         check("安全: .control shell 命令被拒绝", any("系统命令" in p for p in check_netlist_safety(shell_nl)))
         inc_nl = "* x\n.include C:/Users/secret.txt\nV1 a 0 1\n.end\n"
-        check("安全: 绝对路径 .include 被拒绝", any("相对路径" in p for p in check_netlist_safety(inc_nl)))
+        check("安全: 绝对路径 .include 被拒绝", any("路径" in p for p in check_netlist_safety(inc_nl)))
+        check("安全: ../ 相对 .include 放行（ngspice 惯用法）",
+              not check_netlist_safety("* x\n.include ../adder_common.inc\nV1 a 0 1\n.end\n"))
+        check("安全: quit 放行（无副作用）",
+              not check_netlist_safety("* x\nV1 a 0 1\n.control\nop\nquit\n.endc\n.end\n"))
         check("安全: 正常网表零误报", check_netlist_safety(RC_NETLIST) == [])
 
         ESCAPE = ('cw = [c for c in (1).__class__.__base__.__subclasses__() '
