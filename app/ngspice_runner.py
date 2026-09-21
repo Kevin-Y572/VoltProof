@@ -95,7 +95,10 @@ class SimResult:
         text = "\n".join(dict.fromkeys(lines[-15:]))  # 去重保序
         if not text.strip():
             # 找不到可执行文件/超时等报错不含关键字，直接透传原始输出尾部
-            text = (self.stderr or self.stdout or "仿真失败，且 stderr/stdout/日志均为空")[-800:]
+            # （log 也要进兜底链：ngspice 静默空跑时 stdout/stderr 全空、
+            # 诊断信息只在 -o 日志里——2026-09-22 调试时它缺席导致误判）
+            text = (self.stderr or self.stdout or self.log
+                    or "仿真失败，且 stderr/stdout/日志均为空")[-800:]
         return text.strip()[:2000]
 
 
@@ -117,9 +120,15 @@ def _run_capped(args: list, cwd: Path, timeout: int, cap: int = 8 * 1024 * 1024)
     海量数据（如 .control 里 print/plot 把绘图数据打到 stdout）时读取
     线程会阻塞，超时机制随之失效、调用永久挂死（2026-09-21 开源网表
     回归实测：combplot 类示例挂死进程）。改为独立线程计数读取，超上限
-    或超时直接 kill。"""
-    p = subprocess.Popen(args, cwd=str(cwd), stdout=subprocess.PIPE,
-                         stderr=subprocess.PIPE)
+    或超时直接 kill。
+    cwd 必须先 resolve 成绝对路径：Windows 的 CreateProcess 对相对
+    lpCurrentDirectory 行为未定义——ngspice 实测要么挂死到超时、要么
+    静默空跑（2026-09-22 定位：同一网表相对 cwd 必挂、绝对 cwd 0.5s）。
+    子进程 stdin 必须显式关闭（DEVNULL）：ngspice-47 Windows 批处理模式
+    会读继承来的 stdin——stdin 是永不 EOF 的管道（服务进程/后台调用）时
+    进程挂死到超时（2026-09-22 实测：终端交互正常、脚本内调用全部超时）。"""
+    p = subprocess.Popen(args, cwd=str(Path(cwd).resolve()), stdin=subprocess.DEVNULL,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     buf: dict[str, list] = {"out": [], "err": []}
     exceeded = threading.Event()
 
@@ -155,7 +164,10 @@ def run_netlist(netlist_text: str, workdir: str | Path | None = None) -> SimResu
     safety = check_netlist_safety(netlist_text)
     if safety:
         return SimResult(False, "", "；".join(safety), "", None, 0.0)
-    workdir = Path(workdir) if workdir else Path(tempfile.mkdtemp(prefix="circuitpilot_"))
+    # resolve 成绝对路径再派生子进程：Windows CreateProcess 会切换子进程
+    # cwd，相对的 -o/网表参数随之失效（实测：静默空跑 + rc!=0，日志停在旧文件）
+    workdir = (Path(workdir) if workdir
+               else Path(tempfile.mkdtemp(prefix="circuitpilot_"))).resolve()
     workdir.mkdir(parents=True, exist_ok=True)
     for old in workdir.glob("*.raw"):
         old.unlink()  # 防旧产物污染：workdir 复用时绝不能把上次的 raw 当本次结果
