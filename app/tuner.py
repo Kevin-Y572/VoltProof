@@ -61,6 +61,8 @@ def numeric_tune(netlist: str, hints: list[dict]) -> tuple[str | None, str]:
     harmonic hint：加法器线性，a_h/a_1 = (R_1·A_h)/(R_h·A_1)——把接到
       signal 节点、另一端连着 hint.freq 频率 SIN 源的电阻 R_h 改为
       R_h × (measured/target)，比值精确校正（源幅度不变时）。
+    startup hint：未起振不是数值偏差而是结构问题——给定时电容插 .ic
+      初始电压打破对称静态点（判分层给出方向，这里确定性落地）。
     """
     lines = netlist.splitlines()
     srcs = _parse_sin_sources(netlist)
@@ -68,6 +70,21 @@ def numeric_tune(netlist: str, hints: list[dict]) -> tuple[str | None, str]:
     changed = False
     for h in hints:
         kind = h.get("kind")
+        if kind == "startup":
+            ins = _tune_startup(lines)
+            if ins is not None:
+                idx, ic_line, note = ins
+                lines.insert(idx, ic_line)
+                notes.append(note)
+                changed = True
+            continue  # 起振类没有数值含义，插不进 .ic 就回退 LLM 结构修复
+        if kind == "clamp":
+            n_fixed = _tune_clamp(lines)
+            if n_fixed:
+                notes.append(f"限幅修复：{n_fixed} 个高增益 E 源改为 "
+                             "VALUE={{max(-轨, min(gain*v(+,-), +轨))}} 钳位输出")
+                changed = True
+            continue  # 找不到可改写的线性 E 源则回退 LLM
         measured, target = h.get("measured"), h.get("target")
         if kind not in ("vpp", "freq", "harmonic") or not measured or not target:
             continue
@@ -152,6 +169,83 @@ def _tune_harmonic_resistor(netlist: str, lines: list[str], srcs: list[dict],
                     f"（谐波比实测 {h['measured']:.3f} → 目标 {h['target']:.3f}）")
             return i, " ".join(toks), note
     return None
+
+
+def _tune_startup(lines: list[str]) -> tuple[int, str, str] | None:
+    """未起振的确定性修复：给（子电路外的）最大电容设 .ic 初值，打破
+    对称静态点。返回 (插入行号, .ic 行, 说明)；已有 .ic 或找不到电容 → None。
+    即便选中的不是"真正的"定时电容，一个非零初值同样能扰动亚稳态直流解——
+    目标只是打破对称，不是精确预置。"""
+    if any(ln.strip().lower().startswith(".ic") for ln in lines):
+        return None  # 已有 .ic 仍不起振，结构问题超出数值修复能力
+    supply = 5.0  # 找不到 DC 源时的保守默认
+    for ln in lines:
+        m = re.match(r"^V\w+\s+\S+\s+\S+\s+DC\s+([-+0-9.eE]+[a-zA-Z]*)", ln, re.IGNORECASE)
+        if m:
+            supply = max(supply, abs(_spice_val(m.group(1))))
+    best = None  # (电容值, 电容名, 节点)
+    in_sub = False
+    for ln in lines:
+        low = ln.strip().lower()
+        if low.startswith(".subckt"):
+            in_sub = True
+        elif low.startswith(".ends"):
+            in_sub = False
+        elif not in_sub:
+            m = re.match(r"^(C\w+)\s+(\S+)\s+(\S+)\s+([-+0-9.eE]+[a-zA-Z]*)", ln, re.IGNORECASE)
+            if m:
+                val = _spice_val(m.group(4))
+                node = m.group(2) if m.group(2) != "0" else m.group(3)
+                if val > 0 and node != "0" and (best is None or val > best[0]):
+                    best = (val, m.group(1), node)
+    if best is None:
+        return None
+    _val, cname, node = best
+    v_ic = supply / 3.0
+    # 插在 .control 前（无则 .end 前，再无则文件末尾）
+    idx = len(lines)
+    for i, ln in enumerate(lines):
+        if ln.strip().lower().startswith(".control"):
+            idx = i
+            break
+    else:
+        for i, ln in enumerate(lines):
+            if ln.strip().lower() == ".end":
+                idx = i
+                break
+    ic_line = f".ic v({node})={v_ic:g}"
+    note = f"起振修复：{cname} 所在节点 {node} 设初值 {v_ic:g}V（.ic 打破对称静态点）"
+    return idx, ic_line, note
+
+
+def _tune_clamp(lines: list[str]) -> int:
+    """输出超电源轨的确定性修复：把高增益线性 VCVS（E 源裸增益形式
+    `E1 out 0 a b 1e5`）改写成 min/max 钳位形式。返回改写条数。
+    只动增益绝对值 ≥1000 的 E 源——运放级；增益 1 的求和/缓冲 E 源是
+    功能块，钳位反而破坏电路。VALUE 形式的 E 源（可能已带钳位）跳过。
+    钳位用 max(lo,min(x,hi))：ngspice-47 的 limit() 实测不做钳位
+    （静态回垃圾值），min/max 三工作点验证正确（2026-09-22）。"""
+    supply = 0.0
+    for ln in lines:
+        m = re.match(r"^V\w+\s+\S+\s+\S+\s+DC\s+([-+0-9.eE]+[a-zA-Z]*)", ln, re.IGNORECASE)
+        if m:
+            supply = max(supply, abs(_spice_val(m.group(1))))
+    if supply <= 0:
+        supply = 15.0  # 找不到 DC 源时的常见运放轨
+    rail = supply - 0.5
+    fixed = 0
+    for i, ln in enumerate(lines):
+        toks = ln.split()
+        if len(toks) != 6 or not toks[0].upper().startswith("E"):
+            continue
+        gain = _spice_val(toks[5])
+        if abs(gain) < 1000:
+            continue
+        name, n_out, n_ref, n_p, n_m = toks[0], toks[1], toks[2], toks[3], toks[4]
+        lines[i] = (f"{name} {n_out} {n_ref} VALUE={{max(-{rail:g},"
+                    f" min({toks[5]}*v({n_p},{n_m}), {rail:g}))}}")
+        fixed += 1
+    return fixed
 
 
 def _fmt(v: float) -> str:

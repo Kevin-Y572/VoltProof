@@ -21,6 +21,20 @@ class Traces:
     time: np.ndarray | None          # .tran 的时间轴；.ac 时是频率轴
     signals: dict[str, np.ndarray]
     warning: str | None = None       # 非致命问题（如 spyci 降级原因），透出到证据
+    # 数据来自哪种分析：ac（复数取模）/ tran / op（单点）。
+    # 验收器必须区分——同一份"幅度"数组，AC 里是各频点增益、tran 里是瞬时
+    # 电压，混用会把恒定 1.0 的 AC 源算成 ptp=0 再除出 1e14 的荒谬增益
+    # （2026-09-22 bench 实测：sensor-conditioning 假失败即此因）
+    analysis: str = "unknown"
+
+
+def _infer_analysis(is_ac: bool, time_axis: np.ndarray | None) -> str:
+    """is_ac 直接来自 raw 的 flags；无时间轴（单点）判 op，否则 tran。"""
+    if is_ac:
+        return "ac"
+    if time_axis is None or len(time_axis) <= 1:
+        return "op"
+    return "tran"
 
 
 def load_traces(raw_path: str | Path) -> Traces:
@@ -45,7 +59,8 @@ def load_traces(raw_path: str | Path) -> Traces:
                 time_axis = arr
             else:
                 signals[name] = arr
-        return Traces(time=time_axis, signals=signals)
+        analysis = _infer_analysis(is_ac, time_axis)
+        return Traces(time=time_axis, signals=signals, analysis=analysis)
     except Exception as e:
         # spyci 解析不了的边界：op 分析后 write 会产出重复变量名（v(in) 出现两次），
         # spyci 构造结构化数组时直接抛错——用内置简易解析器兜底（重名列去重）。
@@ -109,7 +124,8 @@ def _fallback_parse(path: Path) -> Traces:
             time_axis = mag
         else:
             signals[name] = mag
-    return Traces(time=time_axis, signals=signals)
+    return Traces(time=time_axis, signals=signals,
+                  analysis=_infer_analysis(saw_complex, time_axis))
 
 
 # ---------------------------------------------------------------------------

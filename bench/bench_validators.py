@@ -86,6 +86,23 @@ def _gain_check(ev, tr, target, tol, name, frac_out="out", frac_in="in"):
         return [_ck(name, False, "缺输入或输出信号")]
     _to, yo = so
     _ti, yi = si
+    if tr is not None and tr.analysis == "ac":
+        # AC 数据是各频点幅值：增益 = 通带内 |out|/|in|（低频段均值）。
+        # 不能用 ptp——AC 源幅值恒定（如 AC 1 时 in 全程=1.0，ptp=0），
+        # 除以 ptp 会得出 1e14 级荒谬增益（2026-09-22 sensor 假失败实锤）
+        n = max(len(yo) // 6, 1)  # 最低 ~1/6 频程视为通带
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = np.asarray(yo[:n], dtype=float) / np.asarray(yi[:n], dtype=float)
+        ratio = ratio[np.isfinite(ratio) & (np.abs(np.asarray(yi[:n], dtype=float)) > 1e-12)]
+        if len(ratio) == 0:
+            return [_ck(name, False, "AC 通带内输入幅值≈0，增益无法计算")]
+        gain = float(np.mean(ratio))
+        return [_ck(name, _near(gain, target, tol),
+                    f"AC 通带增益 {gain:.2f}（目标 {target}）")]
+    if float(np.ptp(yi)) < 1e-9:
+        # 输入是常数（如激励没接进来/直流偏置）——报真实原因，别报 1e14
+        return [_ck(name, False,
+                    f"输入信号峰峰值为 {float(np.ptp(yi)):.2g}（恒定），增益无从谈起")]
     gain = float(np.ptp(yo)) / max(float(np.ptp(yi)), 1e-12)
     return [_ck(name, _near(gain, target, tol), f"实测幅度增益 {gain:.2f}（目标 {target}）")]
 
@@ -137,18 +154,59 @@ def v_square_osc(ev, tr):
     t, y = s
     dom = dominant_freq(t, y)
     if dom is None:
-        return [_ck("方波频率≈1kHz", False, "信号非周期（未起振？）")]
+        # 未起振是结构性问题，不是数值差多少——回喂可执行的结构修复指导
+        # （tuner 确定性插 .ic；LLM 路径也能按 message 里的清单自查）
+        return [{
+            "name": "为周期信号（已起振）", "ok": False,
+            "detail": "信号非周期（未起振）：对称静态点问题。修复清单——"
+                      "① .ic 给定时电容设初始电压打破对称；② 核对环路增益>1"
+                      "（反馈衰减×放大倍数）；③ 两侧元件值轻微不对称；"
+                      "④ .tran 时长≥10 个目标周期",
+            "tune_hint": {
+                "kind": "startup",
+                "message": "输出恒定未起振：插入 .ic 打破定时电容的对称静态点",
+            },
+        }]
     f0 = dom[0]
     vpp = float(np.ptp(y))
-    return [
-        _ck("频率≈1kHz(±15%)", _near(f0, 1000, 0.15), f"实测 {f0:.0f}Hz"),
-        _ck("为周期信号（已起振）", vpp > 0.5, f"vpp={vpp:.2f}V"),
-    ]
+    checks = []
+    if vpp > 100.0:
+        # 理想受控源没接电源轨——幅度上天（实测见过 2.8e10V），此时频率
+        # 也被巨幅摆动拖偏，必须先钳幅再谈频率
+        checks.append({
+            "name": "输出幅度在电源轨内", "ok": False,
+            "detail": f"vpp={vpp:.3g}V——理想运放/受控源未限幅。给运放子电路的"
+                      " E 源输出加钳位（注意 ngspice 的 limit() 不起作用，"
+                      "必须用 min/max）：E1 out 0 VALUE={{max(-11.5,"
+                      " min(1e5*v(a,b), 11.5))}}",
+            "tune_hint": {"kind": "clamp",
+                          "message": "输出超出电源轨：E 源输出用 min/max 钳位"},
+        })
+    else:
+        checks.append(_ck("输出幅度在电源轨内", True, f"vpp={vpp:.2f}V"))
+    checks.append(_ck("频率≈1kHz(±15%)", _near(f0, 1000, 0.15), f"实测 {f0:.0f}Hz"))
+    checks.append(_ck("为周期信号（已起振）", vpp > 0.5, f"vpp={vpp:.2f}V"))
+    return checks
 
 
 def v_sensor(ev, tr):
-    return _gain_check(ev, tr, 500, 0.35, "总增益≈500(±35%)",
-                       frac_out="out", frac_in="in")
+    checks = _gain_check(ev, tr, 500, 0.35, "总增益≈500(±35%)",
+                         frac_out="out", frac_in="in")
+    # 任务要求一阶低通 -3dB≈100Hz——只对 AC 数据判，缺数据给出补扫指导
+    if tr is not None and tr.analysis == "ac":
+        s = _sig(tr, "out") or _sig(tr, "v(")
+        if s and s[0] is not None:
+            f, mag = s
+            peak = float(np.max(mag))
+            below = np.where(mag < 0.707 * peak)[0]
+            fc = float(f[below[0]]) if len(below) else float("inf")
+            checks.append(_ck("-3dB≈100Hz(±50%)", _near(fc, 100, 0.50),
+                              f"实测 {fc:.0f}Hz"))
+    else:
+        checks.append(_ck("-3dB≈100Hz(±50%)", False,
+                          "无交流扫描数据：请在 .control 增加 ac 扫描"
+                          "（如 ac dec 20 1 100k）并 write，放在最后"))
+    return checks
 
 
 VALIDATORS = {

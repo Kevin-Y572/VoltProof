@@ -509,6 +509,70 @@ print("OUT_NODES: v(OUT)")
         check("安全: 沙箱环境不含任何凭据",
               not any(("KEY" in k or "SECRET" in k or "TOKEN" in k) for k in env))
 
+        # ---- 10. Traces.analysis 字段（AC 数据被当 tran 判分曾致 sensor 假失败）----
+        sim_ac2 = run_netlist(AC_NETLIST, workdir=tmp / "an_ac")
+        if sim_ac2.raw_path:
+            check("analysis: ac 网表识别为 ac",
+                  measure.load_traces(sim_ac2.raw_path).analysis == "ac")
+        sim_tr2 = run_netlist(RC_NETLIST, workdir=tmp / "an_tran")
+        if sim_tr2.raw_path:
+            check("analysis: tran 网表识别为 tran",
+                  measure.load_traces(sim_tr2.raw_path).analysis == "tran")
+        sim_op2 = run_netlist(OP_NETLIST, workdir=tmp / "an_op")
+        if sim_op2.raw_path:
+            check("analysis: op 网表识别为 op",
+                  measure.load_traces(sim_op2.raw_path).analysis == "op")
+
+        # ---- 11. 起振/限幅确定性修复（2026-09-22 bench 两失败任务的闭环）----
+        OSC_NL = ("* square osc 1k (relaxation)\nV1 vcc 0 DC 12\n"
+                  "Rf out in 4.55k\nC1 in 0 100n\nR1 out fb 10k\nR2 fb 0 10k\n"
+                  "X1 fb in out opamp\n.subckt opamp a b c\nE1 c 0 a b 100000\n.ends\n"
+                  ".control\nset filetype=ascii\ntran 5u 10m\n"
+                  "write out.raw v(out) v(in)\n.endc\n.end\n")
+        tuned_up, note_up = numeric_tune(OSC_NL, [{"kind": "startup", "message": ""}])
+        check("tuner: startup hint 插入 .ic", tuned_up is not None and ".ic v(in)=" in tuned_up,
+              note_up)
+        if tuned_up:
+            ic_idx = next(i for i, ln in enumerate(tuned_up.splitlines())
+                          if ln.startswith(".ic"))
+            ctrl_idx = next(i for i, ln in enumerate(tuned_up.splitlines())
+                            if ln.strip() == ".control")
+            check("tuner: .ic 插在 .control 之前", ic_idx < ctrl_idx)
+        tuned_up2, _ = numeric_tune(tuned_up or OSC_NL, [{"kind": "startup", "message": ""}])
+        check("tuner: 已有 .ic 时不再重复插", tuned_up2 is None)
+
+        SUM_NL = ("* summer\nVcc vcc 0 DC 15\nV1 a 0 DC 1\nE1 out 0 a 0 1\nE2 mid 0 a 0 100000\n"
+                  "R1 out 0 1meg\nR2 mid 0 1meg\n.end\n")
+        tuned_cl, note_cl = numeric_tune(SUM_NL, [{"kind": "clamp", "message": ""}])
+        check("tuner: clamp 只改高增益 E 源（增益1求和源不动）",
+              tuned_cl is not None
+              and "E1 out 0 a 0 1" in tuned_cl
+              and "max(-14.5, min(100000*v(a,0), 14.5))" in tuned_cl,
+              (note_cl, tuned_cl))
+        # 端到端：对称不振 → .ic 起振 → 幅度上天 → min/max 钳位 → ~1kHz 方波
+        sim_o1 = run_netlist(OSC_NL, workdir=tmp / "osc")
+        check("osc: 原网表仿真通过（静态亚稳）", sim_o1.ok)
+        from app.measure import dominant_freq
+        tr_o1 = measure.load_traces(sim_o1.raw_path)
+        vo1 = next(v for k, v in tr_o1.signals.items() if "out" in k.lower())
+        check("osc: 对称网表判非周期（未起振）", dominant_freq(tr_o1.time, vo1) is None)
+        sim_o2 = run_netlist(tuned_up, workdir=tmp / "osc")
+        tr_o2 = measure.load_traces(sim_o2.raw_path)
+        vo2 = next(v for k, v in tr_o2.signals.items() if "out" in k.lower())
+        dom2 = dominant_freq(tr_o2.time, vo2)
+        check("osc: .ic 后起振", dom2 is not None)
+        check("osc: 无钳位时幅度上天（>1e6V，触发 clamp 的场景）",
+              float(np.ptp(vo2)) > 1e6, f"vpp={float(np.ptp(vo2)):.3g}")
+        tuned_cl2, _ = numeric_tune(tuned_up, [{"kind": "clamp", "message": ""}])
+        sim_o3 = run_netlist(tuned_cl2, workdir=tmp / "osc")
+        tr_o3 = measure.load_traces(sim_o3.raw_path)
+        vo3 = next(v for k, v in tr_o3.signals.items() if "out" in k.lower())
+        dom3 = dominant_freq(tr_o3.time, vo3)
+        check("osc: 钳位后 vpp≈23V（±11.5 轨）", abs(float(np.ptp(vo3)) - 23.0) < 0.5,
+              f"vpp={float(np.ptp(vo3)):.3g}")
+        check("osc: 钳位后频率≈1kHz", dom3 is not None and abs(dom3[0] - 1000) < 60,
+              f"f={None if dom3 is None else dom3[0]:.0f}")
+
         print(f"\n{'='*40}\n{'全部通过' if not FAILURES else '失败: ' + ', '.join(FAILURES)}")
     return 1 if FAILURES else 0
 

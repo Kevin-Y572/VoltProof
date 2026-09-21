@@ -98,6 +98,49 @@ write out.raw v(out)
 .endc
 .end
 """,
+    # 双分析 .control（ac 的 write 在最后）——runner 取到的是 ac.raw。
+    # 曾把 AC 恒定幅值 1.0 当 tran 信号 ptp 判增益，除出 5e14 的假爆炸
+    "sensor-conditioning": """* sensor cond: 0-10mV -> 0-5V, two-stage + 100Hz LPF
+Vcc vcc 0 DC 12
+Vin in 0 DC 0 AC 1 PWL(0 0 30m 10m)
+.subckt opamp inp inn out
+E1 out 0 VALUE={max(-11.5, min(1e5*v(inp,inn), 11.5))}
+.ends
+X1 in fb1 amp1 opamp
+R1 amp1 fb1 19k
+R2 fb1 0 1k
+X2 amp1 fb2 amp2 opamp
+R3 amp2 fb2 24k
+R4 fb2 0 1k
+R5 amp2 vout 1.59k
+C1 vout 0 1u
+.control
+set filetype=ascii
+tran 20u 30m
+write tran.raw v(in) v(vout)
+ac dec 20 1 100k
+write ac.raw v(in) v(vout)
+.endc
+.end
+""",
+    # 对称张弛振荡器：无 .ic 不起振、理想 E 源无钳位——验收器必须抓住
+    "square-osc": """* square osc 1k (relaxation, symmetric on purpose)
+V1 vcc 0 DC 12
+Rf out in 4.55k
+C1 in 0 100n
+R1 out fb 10k
+R2 fb 0 10k
+X1 fb in out opamp
+.subckt opamp a b c
+E1 c 0 a b 100000
+.ends
+.control
+set filetype=ascii
+tran 5u 10m
+write out.raw v(out) v(in)
+.endc
+.end
+""",
 }
 
 FAILS: list[str] = []
@@ -106,6 +149,8 @@ FAILS: list[str] = []
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="cp_bv_"))
     for tid, nl in NL.items():
+        if tid == "square-osc":
+            continue  # 该网表"应判失败"，在下方专段验证
         v = VALIDATORS.get(tid)
         if not v:
             continue
@@ -136,6 +181,33 @@ write out.raw v(out)
     print(f"[{'PASS' if bad else 'FAIL'}] 反例: 12→9V 分压被正确判不达标")
     if not bad:
         FAILS.append("反例")
+
+    # square-osc 闭环：对称网表必须被抓住"未起振"并给出 startup hint，
+    # 且 tune_hint 确定性修复三轮内达标（.ic 起振 → min/max 钳位 → ~1kHz）
+    from app.tuner import numeric_tune
+
+    netlist = NL["square-osc"]
+    caught_startup = False
+    closed_loop = False
+    for rnd in range(4):
+        sim = run_netlist(netlist, workdir=tmp / f"osc{rnd}")
+        if not sim.raw_path:
+            break
+        checks = VALIDATORS["square-osc"](None, load_traces(sim.raw_path))
+        if all(c["ok"] for c in checks):
+            closed_loop = True
+            print(f"[{'PASS' if closed_loop else 'FAIL'}] square-osc: 确定性闭环第 {rnd} 轮全达标")
+            break
+        hints = [c.get("tune_hint") for c in checks if c.get("tune_hint")]
+        if rnd == 0:
+            caught_startup = any(h and h.get("kind") == "startup" for h in hints)
+            print(f"[{'PASS' if caught_startup else 'FAIL'}] square-osc: 未起振被抓出并附 startup hint")
+        tuned, _note = numeric_tune(netlist, hints) if hints else (None, "")
+        if not tuned:
+            break
+        netlist = tuned
+    if not closed_loop:
+        FAILS.append("square-osc-闭环")
 
     print(f"\n{'全部通过' if not FAILS else '失败: ' + ', '.join(FAILS)}")
     return 1 if FAILS else 0
