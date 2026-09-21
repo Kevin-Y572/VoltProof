@@ -290,7 +290,7 @@ print("OUT_NODES: v(OUT)")
         check("布局: 多端元件(X)+子电路 网表渲染成功", png3 is not None and png3.exists())
 
         # ---- 8. 程序化数值调参（tune_hint → 确定性改源幅度/频率）----
-        from app.tuner import numeric_tune
+        from app.tuner import _spice_val, numeric_tune
 
         NL2 = ("* synth\nV1 a 0 SIN(0 1 1000)\nV2 b 0 SIN(0 0.33 3000)\n"
                "R1 a sum 10k\nR2 b sum 30k\n.end\n")
@@ -307,6 +307,19 @@ print("OUT_NODES: v(OUT)")
         tuned2, _ = numeric_tune("* osc\nVcc vcc 0 12\nQ1 a b c m\n.model m NPN\n.end\n",
                                  [{"kind": "vpp", "measured": 3, "target": 6, "freq": 1000}])
         check("tuner: 无匹配 SIN 源时返回 None（回退 LLM）", tuned2 is None)
+
+        # 谐波比调参：加法器 R_h 与谐波比成反比
+        SYN = ("* synth\nV1 n1 0 SIN(0 1 1000)\nV3 n3 0 SIN(0 1 3000)\n"
+               "R1 n1 sum 10k\nR3 n3 sum 200k\nRf sum out 10k\n.end\n")
+        tuned3, note3 = numeric_tune(SYN, [{"kind": "harmonic", "measured": 0.05,
+                                            "target": 1 / 3, "signal": "sum", "freq": 3000}])
+        check("tuner: 谐波 hint 定位加权电阻", tuned3 is not None, note3)
+        if tuned3:
+            r3_line = [ln for ln in tuned3.splitlines() if ln.startswith("R3")][0]
+            new_r3 = _spice_val(r3_line.split()[3])
+            check("tuner: R3 按反比缩放（200k×0.15=30k）", abs(new_r3 - 30000) < 1, r3_line)
+            r1_line = [ln for ln in tuned3.splitlines() if ln.startswith("R1")][0]
+            check("tuner: 基波电阻不动", "10k" in r1_line, r1_line)
 
         # ---- 9. 安全过滤（2026-09-21 审查：两个实测 PoC 的回归）----
         from app.ngspice_runner import check_netlist_safety

@@ -167,8 +167,12 @@ def validator_exp2(ev, tr) -> list[dict]:
     res = [_ck("合成输出基波1kHz", _near(st.f0, 1000, 0.06), f"实测 f0={st.f0:.1f}Hz")]
     a1 = st.harmonic(t, y, 1000)
     a3 = st.harmonic(t, y, 3000)
-    res.append(_ck("含明显3次谐波(方波特征)", a3 > 0.05 * a1,
-                   f"a3/a1={a3 / max(a1, 1e-9):.3f}（理想 1/3）"))
+    r3 = a3 / max(a1, 1e-9)
+    res.append({**_ck("含明显3次谐波(方波特征)", r3 > 0.05,
+                      f"a3/a1={r3:.3f}（理想 1/3）"),
+                **({"tune_hint": {"kind": "harmonic", "measured": r3, "target": 1 / 3,
+                                  "signal": n, "freq": 3000, "base_freq": 1000}}
+                   if r3 <= 0.05 else {})})
     res.append({**_ck("合成幅度≈5V", _near(st.vpp, 5, 0.2),
                        f"实测 vpp={st.vpp:.3f}V（目标 5V±20%）"),
                 **({"tune_hint": {"kind": "vpp", "measured": st.vpp, "target": 5, "freq": st.f0}}
@@ -187,8 +191,11 @@ def validator_exp3(ev, tr) -> list[dict]:
     a1 = st.harmonic(t, y, 1000)
     a3 = st.harmonic(t, y, 3000)
     a5 = st.harmonic(t, y, 5000)
-    res.append(_ck("含5次谐波(5kHz)", a5 > 0.05 * a1,
-                   f"a5/a1={a5 / max(a1, 1e-9):.3f}"))
+    r5 = a5 / max(a1, 1e-9)
+    res.append({**_ck("含5次谐波(5kHz)", r5 > 0.05, f"a5/a1={r5:.3f}"),
+                **({"tune_hint": {"kind": "harmonic", "measured": r5, "target": 0.2,
+                                  "signal": n, "freq": 5000, "base_freq": 1000}}
+                   if r5 <= 0.05 else {})})
     res.append(_ck("奇次谐波构成1k/3k/5k", a3 > 0.05 * a1 and a5 > 0.05 * a1,
                    f"a3/a1={a3 / max(a1, 1e-9):.3f} a5/a1={a5 / max(a1, 1e-9):.3f}"))
     return res
@@ -205,8 +212,12 @@ def validator_exp4(ev, tr) -> list[dict]:
     a1 = st.harmonic(t, y, 1000)
     a3 = st.harmonic(t, y, 3000)
     r3 = a3 / max(a1, 1e-9)
-    res.append(_ck("谐波衰减接近1/n²(三角波特征 a3/a1≈0.111)",
-                   0.04 < r3 < 0.20, f"a3/a1={r3:.3f}（理想 0.111）"))
+    bad4 = not (0.04 < r3 < 0.20)
+    res.append({**_ck("谐波衰减接近1/n²(三角波特征 a3/a1≈0.111)",
+                      not bad4, f"a3/a1={r3:.3f}（理想 0.111）"),
+                **({"tune_hint": {"kind": "harmonic", "measured": r3, "target": 1 / 9,
+                                  "signal": n, "freq": 3000, "base_freq": 1000}}
+                   if bad4 else {})})
     return res
 
 

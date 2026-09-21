@@ -58,6 +58,9 @@ def numeric_tune(netlist: str, hints: list[dict]) -> tuple[str | None, str]:
 
     vpp hint：在频率最接近 hint["freq"] 的 SIN 源上，幅度 × (target/measured)。
     freq hint：该 SIN 源频率 × (target/measured)。
+    harmonic hint：加法器线性，a_h/a_1 = (R_1·A_h)/(R_h·A_1)——把接到
+      signal 节点、另一端连着 hint.freq 频率 SIN 源的电阻 R_h 改为
+      R_h × (measured/target)，比值精确校正（源幅度不变时）。
     """
     lines = netlist.splitlines()
     srcs = _parse_sin_sources(netlist)
@@ -66,19 +69,29 @@ def numeric_tune(netlist: str, hints: list[dict]) -> tuple[str | None, str]:
     for h in hints:
         kind = h.get("kind")
         measured, target = h.get("measured"), h.get("target")
-        if kind not in ("vpp", "freq") or not measured or not target:
+        if kind not in ("vpp", "freq", "harmonic") or not measured or not target:
             continue
         if measured <= 0 or target <= 0:
             continue
         ratio = target / measured
         # 限制单轮缩放幅度，避免一次过头
-        ratio = max(0.2, min(5.0, ratio))
+        ratio = max(0.05, min(20.0, ratio))
+        if kind == "harmonic":
+            # R_h 与谐波比成反比：新比值 T = M / (R_new/R_old) → R_new = R_old × M/T
+            inv = 1.0 / ratio
+            res = _tune_harmonic_resistor(netlist, lines, srcs, h, inv)
+            if res is None:
+                continue
+            _idx, _newline, note = res
+            lines[_idx] = _newline
+            notes.append(note)
+            changed = True
+            continue
         anchor = h.get("freq") or 0.0
         cand = min(srcs, key=lambda s: abs(s["freq"] - anchor)) if srcs else None
         if cand is None or abs(cand["freq"] - anchor) > max(0.25 * anchor, 200):
             continue  # 找不到对应源（如自激振荡电路），回退 LLM
         m = cand["m"]
-        g = [m.group(1), m.group(2), m.group(3), m.group(4)]
         if kind == "vpp":
             new_amp = cand["amp"] * ratio
             new_line = cand["line"][:m.start(2)] + _fmt(new_amp) + cand["line"][m.end(2):]
@@ -101,6 +114,44 @@ def numeric_tune(netlist: str, hints: list[dict]) -> tuple[str | None, str]:
     if not changed:
         return None, ""
     return "\n".join(lines) + "\n", "；".join(notes)
+
+
+def _tune_harmonic_resistor(netlist: str, lines: list[str], srcs: list[dict],
+                            h: dict, inv: float) -> tuple[int, str, str] | None:
+    """定位加权电阻并按比例改值：signal 节点上、另一端接频率≈hint.freq 的
+    SIN 源的电阻。返回 (行号, 新行, 说明)。"""
+    signal = str(h.get("signal", "")).lower().strip()
+    hfreq = float(h.get("freq", 0))
+    # 节点 -> SIN 源所在行（源引脚1 的节点名）
+    src_node: dict[str, dict] = {}
+    for i, ln in enumerate(lines):
+        toks = ln.split()
+        if toks and toks[0].upper().startswith("V") and len(toks) >= 2:
+            m = _SIN_RE.search(ln)
+            if m:
+                src_node[toks[1].lower()] = {"freq": _spice_val(m.group(4)), "idx": i}
+    for i, ln in enumerate(lines):
+        toks = ln.split()
+        if len(toks) < 4 or not toks[0].upper().startswith("R"):
+            continue
+        n1, n2 = toks[1].lower(), toks[2].lower()
+        # 一端接 signal 节点，另一端接目标谐波源
+        for a, b in ((n1, n2), (n2, n1)):
+            if a != signal or b not in src_node:
+                continue
+            sc = src_node[b]
+            tol = max(0.25 * hfreq, 200)
+            if abs(sc["freq"] - hfreq) > tol:
+                continue
+            old_val = _spice_val(toks[3])
+            if old_val <= 0:
+                continue
+            new_val = old_val * inv
+            toks[3] = _fmt(new_val)
+            note = (f"数值调参：{toks[0]} {old_val:g}→{new_val:g}"
+                    f"（谐波比实测 {h['measured']:.3f} → 目标 {h['target']:.3f}）")
+            return i, " ".join(toks), note
+    return None
 
 
 def _fmt(v: float) -> str:

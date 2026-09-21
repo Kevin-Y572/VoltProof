@@ -200,6 +200,24 @@ write out.raw v(out)
           "SIN(0 2 " in ev_num.netlist, ev_num.netlist.splitlines()[1] if len(ev_num.netlist.splitlines()) > 1 else "")
     check("数值调参: 最终通过", ev_num.ok)
 
+    # ---- 4e. 修复环重启：连续 2 次修复失败 → 重新生成（temperature 提高）----
+    sc3 = Scripted([NO_GROUND, NO_GROUND, NO_GROUND, GOOD, "重启后解读。"])
+    gen_calls: list[float] = []
+    orig_chat = sc3
+
+    class ScriptedT(Scripted):
+        def __call__(self, system, user, temperature=0.2):
+            if "电路设计专家" in system:  # GENERATE_SYSTEM
+                gen_calls.append(temperature)
+            return super().__call__(system, user, temperature)
+
+    with patch.object(llm, "chat", ScriptedT([NO_GROUND, NO_GROUND, NO_GROUND, GOOD, "重启后解读。"])):
+        ev3 = pipeline.run_pipeline("1kHz低通")
+    stages3 = [r["stage"] for r in ev3.retry_log]
+    check("重启: 第 3 次失败后触发 regenerate", "regenerate" in stages3, str(stages3))
+    check("重启: 重生成用更高温度求多样性", any(t > 0.3 for t in gen_calls), str(gen_calls))
+    check("重启: 最终通过", ev3.ok)
+
     # ---- 5. FastAPI 接口 ----
     from fastapi.testclient import TestClient
     from app.main import app

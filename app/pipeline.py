@@ -98,15 +98,27 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
 
     tune_history: list[str] = []  # 验收环的调参历史（每轮实测记录，跨轮累积）
     numeric_tunes = 0             # 数值调参次数上限：线性近似不成立时及时回退 LLM
+    llm_fix_fails = 0             # 连续 LLM 修复失败次数：≥2 时重启换架构（跳出局部解）
     for rnd in range(max_retries + 1):
         if not netlist:  # skidl 轨构建彻底失败（日志已在 _skidl_track 里）
             break
+        # ---- 修复环重启：同一网表连续修不好，说明架构有问题，重新设计 ----
+        if llm_fix_fails >= 2:
+            ev.retry_log.append({"round": rnd, "stage": "regenerate",
+                                 "problems": ["连续修复失败，换一种电路架构重新生成"]})
+            netlist = llm.extract_code_block(
+                llm.chat(prompts.GENERATE_SYSTEM,
+                         prompts.generate_user(request, previous_netlist), temperature=0.5)
+            )
+            llm_fix_fails = 0
+            continue
         # ---- 静态检查 ----
         chk = checks.run_checks(netlist)
         if not chk.ok:
             ev.retry_log.append({"round": rnd, "stage": "static-check", "problems": chk.errors})
             if rnd == max_retries:
                 break
+            llm_fix_fails += 1
             netlist = _repair(netlist, chk.errors)
             continue
 
@@ -117,6 +129,7 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
                                  "problems": [sim.error_snippet or "仿真失败且无报错文本"]})
             if rnd == max_retries:
                 break
+            llm_fix_fails += 1
             netlist = _repair(netlist, [sim.error_snippet])
             continue
         if sim.raw_path is None:
@@ -131,7 +144,8 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
                 "添加 set filetype=ascii 和 write out.raw v(输出节点)，其余部分保持不变"])
             continue
 
-        # ---- 成功：解析、测指标、出图 ----
+        # ---- 成功：解析、测指标、出图（修复环计数归零）----
+        llm_fix_fails = 0
         tr = None
         try:
             tr = measure.load_traces(sim.raw_path)
