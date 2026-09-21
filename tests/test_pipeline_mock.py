@@ -84,6 +84,10 @@ class Scripted:
 
 
 def main() -> int:
+    # 清结果缓存：多个用例共用同一请求文本，不能互相吃到缓存
+    import shutil as _sh
+    from pathlib import Path as _P
+    _sh.rmtree(_P(__file__).resolve().parent.parent / ".cache", ignore_errors=True)
     # ---- 1. 一次通过 ----
     with patch.object(llm, "chat", Scripted([GOOD, "解读：实测-3dB约1kHz。"])):
         ev = pipeline.run_pipeline("1kHz低通滤波器")
@@ -96,7 +100,7 @@ def main() -> int:
     # ---- 2. 静态检查失败 → 自动修复 ----
     sc = Scripted([NO_GROUND, GOOD, "解读：修复后通过。"])
     with patch.object(llm, "chat", sc):
-        ev = pipeline.run_pipeline("1kHz低通滤波器")
+        ev = pipeline.run_pipeline("1kHz低通滤波器-静态修复用例")
     check("静态修复: ok", ev.ok, str(ev.retry_log))
     stages = [r["stage"] for r in ev.retry_log]
     check("静态修复: 记录了 static-check 轮", "static-check" in stages, str(stages))
@@ -104,7 +108,7 @@ def main() -> int:
 
     # ---- 3. 仿真失败（无 raw）→ 自动修复 ----
     with patch.object(llm, "chat", Scripted([NO_CONTROL, GOOD, "解读：修复后通过。"])):
-        ev = pipeline.run_pipeline("1kHz低通滤波器")
+        ev = pipeline.run_pipeline("1kHz低通滤波器-仿真修复用例")
     check("仿真修复: ok", ev.ok, str(ev.retry_log))
     stages = [r["stage"] for r in ev.retry_log]
     check("仿真修复: 记录了 simulate 轮", "simulate" in stages, str(stages))
@@ -217,6 +221,25 @@ write out.raw v(out)
     check("重启: 第 3 次失败后触发 regenerate", "regenerate" in stages3, str(stages3))
     check("重启: 重生成用更高温度求多样性", any(t > 0.3 for t in gen_calls), str(gen_calls))
     check("重启: 最终通过", ev3.ok)
+
+    # ---- 4f. 结果缓存：相同请求第二次零 LLM 调用 ----
+    import shutil as _sh
+    from pathlib import Path as _P
+    _sh.rmtree(_P(__file__).resolve().parent.parent / ".cache", ignore_errors=True)
+    sc_c1 = Scripted([GOOD, "缓存测试解读。"])
+    with patch.object(llm, "chat", sc_c1):
+        pipeline.run_pipeline("缓存测试电路")
+    sc_c2 = Scripted([])  # 空：任何调用都会 IndexError
+    with patch.object(llm, "chat", sc_c2):
+        ev_c2 = pipeline.run_pipeline("缓存测试电路")
+    check("缓存: 第二次命中（零 LLM 调用）", ev_c2.ok and len(sc_c2.calls) == 0
+          and any(r["stage"] == "cache" for r in ev_c2.retry_log),
+          str([r["stage"] for r in ev_c2.retry_log]))
+    check("缓存: 证据完整（波形/指标/解读）",
+          ev_c2.waveform_b64 is not None and ev_c2.metrics and ev_c2.interpretation)
+    with patch.object(llm, "chat", Scripted([GOOD, "缓存测试解读。"])) as _s:
+        ev_c3 = pipeline.run_pipeline("缓存测试电路", validators=[lambda e, t: []])
+    check("缓存: 带 validators 时不吃缓存（真实测量）", ev_c3.ok and len(_s.calls) >= 2)
 
     # ---- 5. FastAPI 接口 ----
     from fastapi.testclient import TestClient

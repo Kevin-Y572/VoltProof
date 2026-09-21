@@ -21,3 +21,4 @@ skidl.log
 bench/exp_skidl/
 bench/regress_out/
 bench/external/
+.cache/

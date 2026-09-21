@@ -77,6 +77,18 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
                  initial_netlist: str | None = None) -> Evidence:
     """initial_netlist：用户上传的网表——跳过生成环节直接进"检查→仿真→
     验收→修复"循环（诊断场景），验证通过后同样进入会话状态供后续修改。"""
+    from . import cache as _cache
+
+    # 结果缓存：相同请求（无验收器）直接返回完整证据——演示防翻车（2.6 规划项）
+    if validators is None and initial_netlist is None:
+        cached = _cache.get(request, previous_netlist, backend)
+        if cached is not None:
+            ev = Evidence(**{k: v for k, v in cached.items()
+                             if k in Evidence.__dataclass_fields__ and k != "elapsed"})
+            ev.elapsed = 0.0
+            ev.retry_log.append({"round": 0, "stage": "cache", "problems": []})
+            return ev
+
     ev = Evidence(request=request)
     t0 = time.monotonic()
 
@@ -219,6 +231,8 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
 
     ev.elapsed = time.monotonic() - t0
     ev.netlist = ev.netlist or netlist  # 失败时也保留最后版本，便于诊断
+    if ev.ok and validators is None and initial_netlist is None:
+        _cache.put(request, previous_netlist, backend, ev.to_dict())
     return ev
 
 
