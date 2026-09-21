@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.pipeline import run_pipeline  # noqa: E402
+from bench_validators import get_validators  # noqa: E402
 
 BENCH = Path(__file__).resolve().parent
 
@@ -28,9 +29,14 @@ def main() -> None:
     for t in tasks:
         t0 = time.monotonic()
         try:
-            ev = run_pipeline(t["prompt"], backend=backend)
-            ok = ev.ok
+            ev = run_pipeline(t["prompt"], backend=backend,
+                              validators=get_validators(t["id"]))
+            ok = ev.ok and ev.checks and all(c["ok"] for c in ev.checks)
             retries = len([r for r in ev.retry_log if r["stage"] != "generate"])
+            print(f"[{t['id']}] {'验收通过' if ok else ('仿真通过但指标未达标' if ev.ok else '失败')}"
+                  f" | 重试 {retries} | {time.monotonic() - t0:.1f}s")
+            for c in ev.checks:
+                print(f"  [{'PASS' if c['ok'] else 'FAIL'}] {c['name']} | {c['detail']}")
         except Exception as e:
             ok, retries = False, -1
             print(f"[{t['id']}] 异常: {e}")
@@ -40,12 +46,11 @@ def main() -> None:
             "retries": retries,
             "elapsed": round(time.monotonic() - t0, 1),
         })
-        print(f"[{t['id']}] {'通过' if ok else '失败'} | 重试 {retries} 次 | {rows[-1]['elapsed']}s")
 
     passed = sum(r["ok"] for r in rows)
     avg_time = sum(r["elapsed"] for r in rows) / max(len(rows), 1)
     report = [
-        f"# 基准报告（backend={backend}）",
+        f"# 基准报告（backend={backend}，指标级验收）",
         f"- 时间：{time.strftime('%Y-%m-%d %H:%M')}",
         f"- 通过：{passed}/{len(rows)}（{passed / len(rows):.0%}）",
         f"- 平均耗时：{avg_time:.1f}s",
