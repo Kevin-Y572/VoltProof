@@ -308,6 +308,28 @@ print("OUT_NODES: v(OUT)")
                                  [{"kind": "vpp", "measured": 3, "target": 6, "freq": 1000}])
         check("tuner: 无匹配 SIN 源时返回 None（回退 LLM）", tuned2 is None)
 
+        # ---- 9. 安全过滤（2026-09-21 审查：两个实测 PoC 的回归）----
+        from app.ngspice_runner import check_netlist_safety
+        from app.sandbox import ast_check, minimal_env
+
+        shell_nl = ("* evil\nV1 a 0 1\nR1 a 0 1k\n.control\n"
+                    "shell echo PWNED > C:/pwned.txt\nop\n.endc\n.end")
+        check("安全: .control shell 命令被拒绝", any("系统命令" in p for p in check_netlist_safety(shell_nl)))
+        inc_nl = "* x\n.include C:/Users/secret.txt\nV1 a 0 1\n.end\n"
+        check("安全: 绝对路径 .include 被拒绝", any("相对路径" in p for p in check_netlist_safety(inc_nl)))
+        check("安全: 正常网表零误报", check_netlist_safety(RC_NETLIST) == [])
+
+        ESCAPE = ('cw = [c for c in (1).__class__.__base__.__subclasses__() '
+                  'if c.__name__ == "catch_warnings"][0]')
+        check("安全: dunder 逃逸链被 AST 拦截",
+              ast_check("import schemdraw\n" + ESCAPE, {"schemdraw"}) is False)
+        check("安全: 正常 schemdraw 代码放行",
+              ast_check("import schemdraw\nimport schemdraw.elements as elm\nd = schemdraw.Drawing()",
+                        {"schemdraw", "schemdraw.elements", "math"}) is True)
+        env = minimal_env()
+        check("安全: 沙箱环境不含任何凭据",
+              not any(("KEY" in k or "SECRET" in k or "TOKEN" in k) for k in env))
+
         print(f"\n{'='*40}\n{'全部通过' if not FAILURES else '失败: ' + ', '.join(FAILURES)}")
     return 1 if FAILURES else 0
 

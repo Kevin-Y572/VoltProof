@@ -12,7 +12,6 @@
 
 from __future__ import annotations
 
-import ast
 import os
 import re
 import shutil
@@ -21,30 +20,13 @@ import sys
 import tempfile
 from pathlib import Path
 
+from .sandbox import ast_check, minimal_env
+
 _ALLOWED_MODULES = {"schemdraw", "schemdraw.elements", "math"}
-_FORBIDDEN_NAMES = {"open", "exec", "eval", "compile", "__import__", "globals", "locals",
-                    "vars", "getattr", "setattr", "delattr", "breakpoint", "input"}
 
 
 def _ast_check(code: str) -> bool:
-    try:
-        tree = ast.parse(code)
-    except SyntaxError:
-        return False
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            if any(a.name not in _ALLOWED_MODULES for a in node.names):
-                return False
-        elif isinstance(node, ast.ImportFrom):
-            if node.module not in _ALLOWED_MODULES:
-                return False
-        elif isinstance(node, ast.Name):
-            if node.id in _FORBIDDEN_NAMES:
-                return False
-        elif isinstance(node, ast.Attribute):
-            if isinstance(node.value, ast.Name) and node.value.id in ("os", "sys", "subprocess"):
-                return False
-    return True
+    return ast_check(code, _ALLOWED_MODULES)
 
 
 _SAVE_RE = re.compile(r"\.save\(\s*['\"]schematic\.png['\"][^)]*\)", re.DOTALL)
@@ -64,9 +46,8 @@ def render_schematic(code: str, out_png: str | Path, timeout: int = 30) -> Path 
         tdp = Path(td)
         script = tdp / "schem.py"
         script.write_text(code, encoding="utf-8")
-        # 强制 Agg：LLM 常写 `with Drawing() as d:`，退出时会 plt.show()，
-        # 默认 TkAgg 在无头子进程里等窗口关闭 → 必然超时
-        env = {**os.environ, "MPLBACKEND": "Agg"}
+        # 强制 Agg + 最小环境（不含任何凭据，纵深防御）
+        env = minimal_env()
         try:
             proc = subprocess.run(
                 [sys.executable, "-I", str(script)],

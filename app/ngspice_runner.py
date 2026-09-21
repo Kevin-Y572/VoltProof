@@ -10,6 +10,7 @@ Windows 下若 ngspice 不在 PATH，设环境变量 CIRCUITPILOT_NGSPICE 指向
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -20,6 +21,34 @@ _NGSPICE = os.environ.get("CIRCUITPILOT_NGSPICE", "ngspice")
 # 超时可覆盖；默认 30s：正常的 tran 远快于此，收敛死循环 30s 也救不回来，
 # 卡满 60s 只是烧掉重试预算（综合实验曾一电路拖满 4×60s）
 _TIMEOUT = int(os.environ.get("CIRCUITPILOT_SIM_TIMEOUT", "30"))
+
+# 安全过滤（2026-09-21 审查发现）：ngspice .control 块支持 shell 等系统命令，
+# 用户/LLM 网表可借此执行任意系统命令（实测 PoC 成功）——一律拒绝。
+_CTRL_DANGER = re.compile(r"^\s*(shell|system|alias|spice|exec|source|cd|quit)\b",
+                          re.IGNORECASE)
+# .include/.lib 只允许相对路径（禁止盘符/网络路径/上跳，防任意文件读取）
+_BAD_INCLUDE = re.compile(r"^\s*[.](include|lib)\s+([\"']?)([a-z]:|[\\\\/]|.*\.\.)",
+                          re.IGNORECASE)
+
+
+def check_netlist_safety(netlist_text: str) -> list[str]:
+    """返回安全问题列表（空列表=安全）。在写文件/起进程前调用。"""
+    problems: list[str] = []
+    in_control = False
+    for ln in netlist_text.splitlines():
+        s = ln.strip()
+        low = s.lower()
+        if low == ".control":
+            in_control = True
+            continue
+        if low == ".endc":
+            in_control = False
+            continue
+        if in_control and _CTRL_DANGER.match(s):
+            problems.append(f"被禁止的系统命令：'{s.split()[0]}'（.control 内不允许执行系统命令）")
+        if _BAD_INCLUDE.match(s):
+            problems.append(f".include/.lib 只允许相对路径：'{s}'")
+    return problems
 
 # 日志/stdout 里出现即判失败的标记（ngspice 手册 + 实测归纳）
 _FATAL_MARKERS = (
@@ -80,6 +109,9 @@ def _fatal_in(*sources: str) -> list[str]:
 
 def run_netlist(netlist_text: str, workdir: str | Path | None = None) -> SimResult:
     """写 .cir、跑 ngspice（batch 模式 -b），返回执行结果。"""
+    safety = check_netlist_safety(netlist_text)
+    if safety:
+        return SimResult(False, "", "；".join(safety), "", None, 0.0)
     workdir = Path(workdir) if workdir else Path(tempfile.mkdtemp(prefix="circuitpilot_"))
     workdir.mkdir(parents=True, exist_ok=True)
     for old in workdir.glob("*.raw"):

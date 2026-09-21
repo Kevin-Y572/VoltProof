@@ -254,8 +254,11 @@ def chat_with_session(session_id: str, message: str,
     """attachment: {filename, content}——网表文件直接作为初始电路，文本文件
     内容并入需求。"""
     s = get_session(session_id)
+    message = message[:8000]  # 正文限长（防内存滥用）
     initial_netlist = None
     if attachment and attachment.get("content"):
+        if len(attachment["content"]) > 256 * 1024:
+            return {"error": "附件超过 256KB 限制"}
         if _looks_like_netlist(attachment.get("filename", ""), attachment["content"]):
             initial_netlist = attachment["content"]
         else:

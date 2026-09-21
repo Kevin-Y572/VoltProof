@@ -24,16 +24,15 @@ SKiDL 是 MIT 的 Python"电路即代码"库：连接显式、数值就是数值
 
 from __future__ import annotations
 
-import ast
 import re
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
+from .sandbox import ast_check, minimal_env
+
 _ALLOWED_MODULES = {"skidl", "skidl.pyspice", "math"}
-_FORBIDDEN_NAMES = {"open", "exec", "eval", "compile", "__import__", "globals", "locals",
-                    "vars", "getattr", "setattr", "delattr", "breakpoint", "input"}
 
 _CONTROL_TMPL = """\
 .control
@@ -44,24 +43,7 @@ write out.raw {outs}
 
 
 def _ast_check(code: str) -> bool:
-    try:
-        tree = ast.parse(code)
-    except SyntaxError:
-        return False
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            if any(a.name not in _ALLOWED_MODULES for a in node.names):
-                return False
-        elif isinstance(node, ast.ImportFrom):
-            if node.module not in _ALLOWED_MODULES:
-                return False
-        elif isinstance(node, ast.Name):
-            if node.id in _FORBIDDEN_NAMES:
-                return False
-        elif isinstance(node, ast.Attribute):
-            if isinstance(node.value, ast.Name) and node.value.id in ("os", "sys", "subprocess"):
-                return False
-    return True
+    return ast_check(code, _ALLOWED_MODULES)
 
 
 def _parse_protocol(stdout: str) -> tuple[str, list[str], list[str]]:
@@ -92,7 +74,7 @@ def build_netlist(code: str, timeout: int = 60) -> tuple[str | None, str]:
             proc = subprocess.run(
                 [sys.executable, "-I", str(tdp / "build.py")],
                 cwd=tdp, capture_output=True, text=True, timeout=timeout,
-                encoding="utf-8", errors="replace",
+                encoding="utf-8", errors="replace", env=minimal_env(),
             )
         except subprocess.TimeoutExpired:
             return None, f"SKiDL 代码执行超过 {timeout}s 超时"
