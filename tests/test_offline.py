@@ -497,6 +497,13 @@ print("OUT_NODES: v(OUT)")
               not check_netlist_safety("* x\n.include ../adder_common.inc\nV1 a 0 1\n.end\n"))
         check("安全: quit 放行（无副作用）",
               not check_netlist_safety("* x\nV1 a 0 1\n.control\nop\nquit\n.endc\n.end\n"))
+        # 外部程序调用：gnuplot/edit 会在服务器桌面弹 GUI（官方示例 combplot.cir 实测）
+        gp_nl = ("* gp\nV1 a 0 1\n.control\ngnuplot gpout1 v(a)\nop\n.endc\n.end")
+        check("安全: .control gnuplot 被拒绝",
+              any("外部程序" in p for p in check_netlist_safety(gp_nl)))
+        check("安全: .control edit 被拒绝",
+              any("外部程序" in p
+                  for p in check_netlist_safety("* e\nV1 a 0 1\n.control\nedit\n.endc\n.end")))
         check("安全: 正常网表零误报", check_netlist_safety(RC_NETLIST) == [])
 
         ESCAPE = ('cw = [c for c in (1).__class__.__base__.__subclasses__() '

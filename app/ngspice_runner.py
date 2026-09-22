@@ -28,6 +28,10 @@ _TIMEOUT = int(os.environ.get("CIRCUITPILOT_SIM_TIMEOUT", "30"))
 # quit 只退出 ngspice 无副作用，放行（否则误伤正常网表习惯）。
 _CTRL_DANGER = re.compile(r"^\s*(shell|system|alias|spice|exec|source|cd)\b",
                           re.IGNORECASE)
+# .control 内启动外部程序的命令：gnuplot 拉起 wgnuplot 绘图前端、edit 拉起
+# 外部编辑器——不执行任意命令但会在服务器桌面弹 GUI 窗口（2026-09-22 官方
+# 示例 plot/combplot.cir 回归实测：未装 gnuplot 时弹"找不到文件 wgnuplot"）
+_CTRL_EXTERNAL = re.compile(r"^\s*(gnuplot|edit)\b", re.IGNORECASE)
 # .include/.lib 拒绝绝对/网络路径（相对 ../ 允许——ngspice 示例的惯用法，
 # 且 include 内容不回显给用户，风险极低）
 _BAD_INCLUDE = re.compile(r"^\s*[.](include|lib)\s+[\"']?([a-z]:|[\\\\]{2}|//)",
@@ -49,6 +53,9 @@ def check_netlist_safety(netlist_text: str) -> list[str]:
             continue
         if in_control and _CTRL_DANGER.match(s):
             problems.append(f"被禁止的系统命令：'{s.split()[0]}'（.control 内不允许执行系统命令）")
+        if in_control and _CTRL_EXTERNAL.match(s):
+            problems.append(f"被禁止的外部程序调用：'{s.split()[0]}'"
+                            "（.control 内不允许启动 gnuplot/编辑器等外部程序）")
         if _BAD_INCLUDE.match(s):
             problems.append(f".include/.lib 只允许相对路径：'{s}'")
     return problems
