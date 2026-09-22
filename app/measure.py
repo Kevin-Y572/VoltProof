@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -37,6 +38,23 @@ def _infer_analysis(is_ac: bool, time_axis: np.ndarray | None) -> str:
     return "tran"
 
 
+_PLOT_HEADER_RE = re.compile(r"^Title:", re.IGNORECASE)
+
+
+def split_plot_sections(text: str) -> list[str]:
+    """把 raw 文本按 plot 段切开（交互会话/外部工具产出的文件可含多段，
+    每段以 Title: 开头）。二进制 raw 的头部同样是 ASCII，可安全分段。"""
+    lines = text.splitlines(keepends=True)
+    starts = [i for i, ln in enumerate(lines) if _PLOT_HEADER_RE.match(ln)]
+    if not starts:
+        return [text]
+    sections = []
+    for j, s in enumerate(starts):
+        end = starts[j + 1] if j + 1 < len(starts) else len(lines)
+        sections.append("".join(lines[s:end]))
+    return sections
+
+
 def load_traces(raw_path: str | Path) -> Traces:
     # spyci 1.0.2 兼容垫片：其内部使用 np.complex_（NumPy 2.0 已移除）
     if not hasattr(np, "complex_"):
@@ -45,6 +63,26 @@ def load_traces(raw_path: str | Path) -> Traces:
     from spyci.spyci import load_raw
 
     path = Path(raw_path)
+    # 多 plot 预检（交互会话/外部工具的 raw 可含多个分析段，ngspice 批处理
+    # 的同名 write 是覆盖所以自家产物不受影响）。spyci 静默取末段不告警、
+    # 内置解析器则会把多段数据搅拌在一起——两条路都必须显式处理
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        text = ""
+    sections = split_plot_sections(text)
+    multi_note = ""
+    if len(sections) > 1:
+        last = sections[-1]
+        m = re.search(r"^Plotname:\s*(.+)$", last, re.MULTILINE | re.IGNORECASE)
+        pname = m.group(1).strip() if m else "未知"
+        multi_note = f"raw 文件含 {len(sections)} 个 plot，已取最后一个（{pname}）"
+        if "Binary:" not in last:
+            # ASCII 多段：直接分段解析，绕开 spyci 的静默取段
+            tr = _parse_ascii_plot(last)
+            tr.warning = multi_note
+            return tr
+        # 二进制多段：只能靠 spyci（实测取末段），警告里注明
     try:
         data = load_raw(str(path))
         is_ac = "complex" in str(data.get("flags", "")).lower()
@@ -60,26 +98,38 @@ def load_traces(raw_path: str | Path) -> Traces:
             else:
                 signals[name] = arr
         analysis = _infer_analysis(is_ac, time_axis)
-        return Traces(time=time_axis, signals=signals, analysis=analysis)
+        tr = Traces(time=time_axis, signals=signals, analysis=analysis)
+        if multi_note:
+            tr.warning = multi_note
+        return tr
     except Exception as e:
         # spyci 解析不了的边界：op 分析后 write 会产出重复变量名（v(in) 出现两次），
         # spyci 构造结构化数组时直接抛错——用内置简易解析器兜底（重名列去重）。
         # 不再静默：降级原因记入 warning 透出到证据卡。
         tr = _fallback_parse(path)
         tr.warning = f"spyci 解析失败，已用内置解析器兜底：{type(e).__name__}: {e}"
+        if multi_note:
+            tr.warning = multi_note + "；" + tr.warning
         return tr
 
 
 def _fallback_parse(path: Path) -> Traces:
-    """极简 ASCII raw 解析：Variables 段收集变量名（重名后列覆盖），Values 段
-    按行号切点。只覆盖 ngspice write 产生的标准格式。"""
+    """路径版兜底：读文件、按 plot 分段后只解析最后一段（老实现会把
+    多段数据混在一起——点数按全文件 token 数算，产出完全是搅拌垃圾）。"""
+    return _parse_ascii_plot(
+        split_plot_sections(path.read_text(encoding="utf-8", errors="replace"))[-1])
+
+
+def _parse_ascii_plot(text: str) -> Traces:
+    """极简 ASCII raw 解析（单 plot 段）：Variables 段收集变量名（重名后列
+    覆盖），Values 段按行号切点。只覆盖 ngspice write 产生的标准格式。"""
     var_names: list[str] = []
     var_types: dict[str, str] = {}
     section: str | None = None
     nums: list[complex] = []
     saw_complex = False  # 值里出现 "re,im" 逗号对 → AC 分析
     point_count = 0
-    for ln in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for ln in text.splitlines():
         s = ln.strip()
         if s == "Variables:":
             section = "vars"

@@ -8,6 +8,7 @@ from __future__ import annotations
 import shutil
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -572,6 +573,61 @@ print("OUT_NODES: v(OUT)")
               f"vpp={float(np.ptp(vo3)):.3g}")
         check("osc: 钳位后频率≈1kHz", dom3 is not None and abs(dom3[0] - 1000) < 60,
               f"f={None if dom3 is None else dom3[0]:.0f}")
+
+        # ---- 12. 兼容层：多 plot raw + CIDER 静态拦截 + 超时报错透出 ----
+        from app.measure import _fallback_parse, split_plot_sections
+
+        mp = tmp / "multiplot.raw"
+        mp.write_text(
+            "Title: demo\nPlotname: Transient Analysis\nFlags: real\n"
+            "No. Variables: 2\nNo. Points: 2\nVariables:\n\t0\ttime\ttime\n\t1\tv(out)\tvoltage\n"
+            "Values:\n0 0.0\n\t0.0\n1 0.001\n\t9.9\n"
+            "Title: demo\nPlotname: AC Analysis\nFlags: complex\n"
+            "No. Variables: 2\nNo. Points: 2\nVariables:\n\t0\tfrequency\tfrequency\n\t1\tv(out)\tvoltage\n"
+            "Values:\n0 10\n\t1.0,0.5\n1 100\n\t0.5,0.2\n")
+        secs = split_plot_sections(mp.read_text())
+        check("多plot: 按 Title 切出 2 段", len(secs) == 2)
+        tr_mp = measure.load_traces(mp)
+        check("多plot: 取末段(AC)且警告带段名",
+              tr_mp.analysis == "ac"
+              and tr_mp.warning is not None and "2 个 plot" in tr_mp.warning
+              and "AC Analysis" in tr_mp.warning, str(tr_mp.warning))
+        check("多plot: 数据是末段的（|1+0.5j|≈1.118 开头）",
+              abs(float(tr_mp.signals["v(out)"][0]) - 1.118) < 0.01
+              and len(tr_mp.signals["v(out)"]) == 2)
+        tr_mp2 = _fallback_parse(mp)
+        check("多plot: fallback 分段后不再搅拌（老实现产出混杂数据）",
+              len(tr_mp2.signals.get("v(out)", [])) == 2
+              and abs(float(tr_mp2.signals["v(out)"][0]) - 1.118) < 0.01,
+              str(tr_mp2.signals))
+
+        cc = checks.run_checks("* c\nQ1 c b e mq\n.model mq nbjt level=2\n.tran 1u 1m\nV1 b 0 0\n")
+        check("兼容: CIDER NBJT 模型被拦截并给出改法",
+              any("CIDER" in e and "compact" in e for e in cc.errors), str(cc.errors))
+        cc2 = checks.run_checks("* c\nQ1 c b e mq\n.model mq npn\n.tran 1u 1m\nV1 b 0 0\n")
+        cc3 = checks.run_checks("* m\nM1 d g s b mm\n.model mm nmos\n.tran 1u 1m\nV1 g 0 0\n")
+        check("兼容: 标准 NPN/NMOS 不被误伤",
+              not any("CIDER" in e for e in cc2.errors + cc3.errors))
+
+        # 超时报错透出：大步数非线性瞬态 + 缩短超时（确定性慢，不依赖具体电路挂死）
+        from app import ngspice_runner
+
+        _old_to = ngspice_runner._TIMEOUT
+        try:
+            ngspice_runner._TIMEOUT = 2
+            t0 = time.monotonic()
+            sim_to = run_netlist(
+                "* long nonlinear tran\nV1 in 0 SIN(0 5 1k)\nD1 in mid d1\n"
+                "R1 mid out 1k\nC1 out 0 10n\n.model d1 D\n"
+                ".control\nset filetype=ascii\ntran 10u 10\nwrite out.raw v(out)\n.endc\n.end\n",
+                workdir=tmp / "hang")
+            check("兼容: 超时网表按上限被杀且报错点明原因",
+                  not sim_to.ok and "超时" in sim_to.error_snippet
+                  and "收敛死循环" in sim_to.error_snippet
+                  and time.monotonic() - t0 < 15,
+                  sim_to.error_snippet[:120])
+        finally:
+            ngspice_runner._TIMEOUT = _old_to
 
         print(f"\n{'='*40}\n{'全部通过' if not FAILURES else '失败: ' + ', '.join(FAILURES)}")
     return 1 if FAILURES else 0

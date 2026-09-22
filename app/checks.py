@@ -15,6 +15,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+# CIDER 数值器件模型类型（官方示例实测收集：examples/cider 下 nbjt/numos/numd）。
+# 标准 ngspice-47 Windows 构建未编译 CIDER 支持且无任何报错——子进程直接
+# 挂死到超时（2026-09-22 实测 60s+ 无输出），必须在仿真前静态拦下
+_CIDER_MODEL_TYPES = {"nbjt", "numos", "numd", "nujfet"}
+
 # 元件类别：首字母 -> (节点字段的取法, 最少 token 数)
 # V/C/L/I/F/H: name n1 n2 value...
 # Q: name c b e [sub] [model] [area]   M: name d g s b [model]
@@ -143,6 +148,12 @@ def run_checks(netlist_text: str) -> CheckResult:
         s = raw.strip()
         if s.lower().startswith(".model"):
             parts = s.split()
+            if len(parts) >= 3 and parts[2].lower() in _CIDER_MODEL_TYPES:
+                result.fail(
+                    f"模型 '{parts[1]}' 的类型 {parts[2].upper()} 是 CIDER 数值器件模型，"
+                    "当前 ngspice 构建不支持（实测无任何输出直接挂死）——"
+                    "请改用标准 SPICE compact 模型（NPN/PNP/NMOS/D 等 + .model 参数）"
+                    "或等效子电路实现")
             if len(parts) >= 2:
                 defined_models.add(parts[1].lower())
         # .include/.lib 引入的模型静态检查无法解析，跳过

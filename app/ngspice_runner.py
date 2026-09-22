@@ -149,14 +149,16 @@ def _run_capped(args: list, cwd: Path, timeout: int, cap: int = 8 * 1024 * 1024)
     t_err.start()
     try:
         rc = p.wait(timeout=timeout)
+        timed_out = False
     except subprocess.TimeoutExpired:
         p.kill()
         p.wait()
         rc = -9
+        timed_out = True
     t_out.join(timeout=2)
     t_err.join(timeout=2)
     text = lambda parts: b"".join(parts).decode("utf-8", errors="replace")  # noqa: E731
-    return rc, text(buf["out"]), text(buf["err"]), exceeded.is_set()
+    return rc, text(buf["out"]), text(buf["err"]), exceeded.is_set(), timed_out
 
 
 def run_netlist(netlist_text: str, workdir: str | Path | None = None) -> SimResult:
@@ -177,11 +179,18 @@ def run_netlist(netlist_text: str, workdir: str | Path | None = None) -> SimResu
 
     t0 = time.monotonic()
     try:
-        rc, stdout, stderr, capped = _run_capped(
+        rc, stdout, stderr, capped, timed_out = _run_capped(
             [_NGSPICE, "-b", "-o", str(log_file), str(cir)], workdir, _TIMEOUT)
         if capped:
             return SimResult(False, stdout[:2000], "仿真输出超过 8MB 上限（疑似在 "
                              "stdout 打印绘图数据），已终止", "", None, time.monotonic() - t0)
+        if timed_out:
+            # 超时被杀的进程三路输出常为空——不点明原因，修复环只能对着
+            # "日志均为空"盲改（2026-09-22 CIDER 网表实测挂死 30s 一无所获）
+            stderr = (f"仿真超时：{_TIMEOUT}s 内未完成已被终止（无输出产生）。常见原因："
+                      "数值收敛死循环（理想受控源环路/高 Q 谐振/不支持的器件类型）；"
+                      "建议给理想受控源串 RC 限幅、减小仿真时长或更换电路拓扑"
+                      + (("；原 stderr：" + stderr) if stderr.strip() else ""))
         log = log_file.read_text(encoding="utf-8", errors="replace") if log_file.exists() else ""
         fatal = _fatal_in(stderr, stdout, log)
         ok = rc == 0 and not fatal

@@ -21,6 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app import checks  # noqa: E402  (CIDER 等不支持的模型静态拦截，毫秒级替代 30s 挂死)
 from app.measure import extract_metrics, load_traces  # noqa: E402
 from app.ngspice_runner import run_netlist  # noqa: E402
 from app.render_wave import render_wave  # noqa: E402
@@ -102,6 +103,14 @@ def main() -> None:
             fails.append((rel, f"读取失败 {e}"))
             continue
         nl = ensure_control_block(src)
+        # 兼容层快速门：CIDER 数值器件网表会让 ngspice 无输出挂死 30s，
+        # 静态拦截毫秒级给出明确原因（只拦 CIDER——其余检查规则为 LLM
+        # 输出设计，对外部权威网表保持只测不判）
+        cider = [e for e in checks.run_checks(nl).errors if "CIDER" in e]
+        if cider:
+            stat["compat_reject"] += 1
+            fails.append((rel, "兼容层拦截：" + cider[0][:100]))
+            continue
         wd = OUT / f.stem
         wd.mkdir(parents=True, exist_ok=True)
         copy_dependencies(f, wd, src)
@@ -143,6 +152,7 @@ def main() -> None:
         "# 开源网表回归报告（ngspice 官方示例，BSD）",
         f"- 时间：{time.strftime('%Y-%m-%d %H:%M')}，抽样 {n} 个，总耗时 {time.time() - t_all:.0f}s",
         f"- 仿真通过：{pct('sim_ok')}（失败 {stat['sim_fail']}，无 raw {stat['no_raw']}）",
+        f"- 兼容层拦截：{stat['compat_reject']}（CIDER 数值器件等不支持的模型，静态毫秒级拦下）",
         f"- 波形解析成功：{pct('parse_ok')}（空信号 {stat['parse_empty']}，异常 {stat['parse_fail']}）",
         f"- 指标产出：{stat['metrics_ok']}，波形图：{stat['wave_ok']}，原理图：{stat['sch_ok']}",
         "",
