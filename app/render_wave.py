@@ -1,4 +1,4 @@
-"""波形渲染为 PNG（matplotlib，PSF 协议）。  [W1]"""
+"""波形渲染为 PNG（matplotlib，PSF 协议）。"""
 
 from __future__ import annotations
 

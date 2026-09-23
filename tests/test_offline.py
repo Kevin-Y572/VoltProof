@@ -1,4 +1,4 @@
-"""离线冒烟测试：不依赖 LLM，验证仿真器/解析/绘图/检查器链路。  [W1/W2]
+"""离线冒烟测试：不依赖 LLM，验证仿真器/解析/绘图/检查器链路。
 
 运行：python tests/test_offline.py   （零依赖自写断言，不引入 pytest）
 """
@@ -481,7 +481,7 @@ print("OUT_NODES: v(OUT)")
             r1_line = [ln for ln in tuned3.splitlines() if ln.startswith("R1")][0]
             check("tuner: 基波电阻不动", "10k" in r1_line, r1_line)
 
-        # ---- 9. 安全过滤（2026-09-21 审查：两个实测 PoC 的回归）----
+        # ---- 9. 安全过滤（两个实测 PoC 的回归）----
         from app.ngspice_runner import check_netlist_safety
         from app.sandbox import ast_check, minimal_env
 
@@ -528,7 +528,7 @@ print("OUT_NODES: v(OUT)")
             check("analysis: op 网表识别为 op",
                   measure.load_traces(sim_op2.raw_path).analysis == "op")
 
-        # ---- 11. 起振/限幅确定性修复（2026-09-22 bench 两失败任务的闭环）----
+        # ---- 11. 起振/限幅确定性修复（bench 两失败任务的闭环）----
         OSC_NL = ("* square osc 1k (relaxation)\nV1 vcc 0 DC 12\n"
                   "Rf out in 4.55k\nC1 in 0 100n\nR1 out fb 10k\nR2 fb 0 10k\n"
                   "X1 fb in out opamp\n.subckt opamp a b c\nE1 c 0 a b 100000\n.ends\n"

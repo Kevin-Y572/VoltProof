@@ -89,7 +89,7 @@ def _gain_check(ev, tr, target, tol, name, frac_out="out", frac_in="in"):
     if tr is not None and tr.analysis == "ac":
         # AC 数据是各频点幅值：增益 = 通带内 |out|/|in|（低频段均值）。
         # 不能用 ptp——AC 源幅值恒定（如 AC 1 时 in 全程=1.0，ptp=0），
-        # 除以 ptp 会得出 1e14 级荒谬增益（2026-09-22 sensor 假失败实锤）
+        # 除以 ptp 会得出 1e14 级荒谬增益（sensor 假失败实锤）
         n = max(len(yo) // 6, 1)  # 最低 ~1/6 频程视为通带
         with np.errstate(divide="ignore", invalid="ignore"):
             ratio = np.asarray(yo[:n], dtype=float) / np.asarray(yi[:n], dtype=float)

@@ -1,4 +1,4 @@
-"""综合实验在环验收器：把《综合实验要求.docx》的指标判定接入 pipeline 重试环。
+"""信号波形合成实验在环验收器：把实验任务书的指标判定接入 pipeline 重试环。
 
 与 bench/verify_exp.py（独立验收仪器，自写 raw 解析）判定口径对齐，但这里
 复用产品的 measure 模块解析（load_traces 已修符号 bug + 均匀重采样），
@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.measure import Traces, dominant_freq, harmonic_amp  # noqa: E402
 
-# 激励/中间节点不算输出（综合实验电路里的振荡源、分频器输出）
+# 激励/中间节点不算输出（实验电路里的振荡源、分频器输出）
 _SRC_PAT = ("osc", "div", "clk", "pulse")
 # 合成输出节点的典型命名
 _OUT_PAT = ("sum", "synth", "tri", "sqr", "out", "sq")

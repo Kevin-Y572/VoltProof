@@ -1,7 +1,7 @@
-"""基准跑批：逐任务执行 pipeline，统计首次通过率/重试后通过率/耗时。  [W2]
+"""基准跑批：逐任务执行 pipeline，统计首次通过率/重试后通过率/耗时。
 
 用法：python bench/run_bench.py [--quick]
-输出：bench/report.md + 控制台摘要。通过率是每周要看的核心质量指标。
+输出：bench/report.md + 控制台摘要。通过率是核心质量指标。
 """
 
 from __future__ import annotations

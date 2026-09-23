@@ -1,6 +1,6 @@
 {
-  "description": "综合实验（信号波形合成实验）测试任务集：提示词逐条取自《综合实验要求.docx》，只陈述要求不给设计方案，用于检验 circuit-pilot 面向真实实验任务的能力。",
-  "source": "综合实验要求.docx —— 信号波形合成实验",
+  "description": "信号波形合成实验任务集：提示词只陈述实验要求、不含设计方案，用于检验 VoltProof 面向真实实验任务的能力。",
+  "source": "信号波形合成实验任务书",
   "tasks": [
     {
       "id": "exp1-basic-sine-gen",

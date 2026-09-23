@@ -1,4 +1,4 @@
-"""ngspice 子进程执行器。一律命令行调用（进程隔离，无 GPL 传染）。  [W1]
+"""ngspice 子进程执行器。一律命令行调用（进程隔离，无 GPL 传染）。
 
 Windows 下若 ngspice 不在 PATH，设环境变量 VOLTPROOF_NGSPICE 指向 ngspice.exe。
 
@@ -20,16 +20,16 @@ from pathlib import Path
 
 _NGSPICE = os.environ.get("VOLTPROOF_NGSPICE", "ngspice")
 # 超时可覆盖；默认 30s：正常的 tran 远快于此，收敛死循环 30s 也救不回来，
-# 卡满 60s 只是烧掉重试预算（综合实验曾一电路拖满 4×60s）
+# 卡满 60s 只是烧掉重试预算（曾有电路拖满 4×60s）
 _TIMEOUT = int(os.environ.get("VOLTPROOF_SIM_TIMEOUT", "30"))
 
-# 安全过滤（2026-09-21 审查发现）：ngspice .control 块支持 shell 等系统命令，
+# 安全过滤：ngspice .control 块支持 shell 等系统命令，
 # 用户/LLM 网表可借此执行任意系统命令（实测 PoC 成功）——一律拒绝。
 # quit 只退出 ngspice 无副作用，放行（否则误伤正常网表习惯）。
 _CTRL_DANGER = re.compile(r"^\s*(shell|system|alias|spice|exec|source|cd)\b",
                           re.IGNORECASE)
 # .control 内启动外部程序的命令：gnuplot 拉起 wgnuplot 绘图前端、edit 拉起
-# 外部编辑器——不执行任意命令但会在服务器桌面弹 GUI 窗口（2026-09-22 官方
+# 外部编辑器——不执行任意命令但会在服务器桌面弹 GUI 窗口（ngspice 官方
 # 示例 plot/combplot.cir 回归实测：未装 gnuplot 时弹"找不到文件 wgnuplot"）
 _CTRL_EXTERNAL = re.compile(r"^\s*(gnuplot|edit)\b", re.IGNORECASE)
 # .include/.lib 拒绝绝对/网络路径（相对 ../ 允许——ngspice 示例的惯用法，
@@ -103,7 +103,7 @@ class SimResult:
         if not text.strip():
             # 找不到可执行文件/超时等报错不含关键字，直接透传原始输出尾部
             # （log 也要进兜底链：ngspice 静默空跑时 stdout/stderr 全空、
-            # 诊断信息只在 -o 日志里——2026-09-22 调试时它缺席导致误判）
+            # 诊断信息只在 -o 日志里——它缺席曾导致误判）
             text = (self.stderr or self.stdout or self.log
                     or "仿真失败，且 stderr/stdout/日志均为空")[-800:]
         return text.strip()[:2000]
@@ -125,15 +125,15 @@ def _run_capped(args: list, cwd: Path, timeout: int, cap: int = 8 * 1024 * 1024)
 
     subprocess.run 的 timeout 依赖 communicate 的读取线程——当子进程输出
     海量数据（如 .control 里 print/plot 把绘图数据打到 stdout）时读取
-    线程会阻塞，超时机制随之失效、调用永久挂死（2026-09-21 开源网表
+    线程会阻塞，超时机制随之失效、调用永久挂死（开源网表
     回归实测：combplot 类示例挂死进程）。改为独立线程计数读取，超上限
     或超时直接 kill。
     cwd 必须先 resolve 成绝对路径：Windows 的 CreateProcess 对相对
     lpCurrentDirectory 行为未定义——ngspice 实测要么挂死到超时、要么
-    静默空跑（2026-09-22 定位：同一网表相对 cwd 必挂、绝对 cwd 0.5s）。
+    静默空跑（同一网表相对 cwd 必挂、绝对 cwd 0.5s）。
     子进程 stdin 必须显式关闭（DEVNULL）：ngspice-47 Windows 批处理模式
     会读继承来的 stdin——stdin 是永不 EOF 的管道（服务进程/后台调用）时
-    进程挂死到超时（2026-09-22 实测：终端交互正常、脚本内调用全部超时）。"""
+    进程挂死到超时（实测：终端交互正常、脚本内调用全部超时）。"""
     p = subprocess.Popen(args, cwd=str(Path(cwd).resolve()), stdin=subprocess.DEVNULL,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     buf: dict[str, list] = {"out": [], "err": []}
@@ -193,7 +193,7 @@ def run_netlist(netlist_text: str, workdir: str | Path | None = None) -> SimResu
                              "stdout 打印绘图数据），已终止", "", None, time.monotonic() - t0)
         if timed_out:
             # 超时被杀的进程三路输出常为空——不点明原因，修复环只能对着
-            # "日志均为空"盲改（2026-09-22 CIDER 网表实测挂死 30s 一无所获）
+            # "日志均为空"盲改（CIDER 网表实测挂死 30s 一无所获）
             stderr = (f"仿真超时：{_TIMEOUT}s 内未完成已被终止（无输出产生）。常见原因："
                       "数值收敛死循环（理想受控源环路/高 Q 谐振/不支持的器件类型）；"
                       "建议给理想受控源串 RC 限幅、减小仿真时长或更换电路拓扑"

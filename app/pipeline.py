@@ -185,8 +185,8 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
         except Exception as e:  # 波形解析失败不致命，证据卡降级
             ev.retry_log.append({"round": rnd, "stage": "measure", "problems": [f"波形解析失败: {e}"]})
 
-        # ---- 验收环：实测指标 vs 需求（2026-09-19 综合实验教训：
-        # "仿真跑通"≠"实验达标"，差距必须回喂 LLM 调参重跑）----
+        # ---- 验收环：实测指标 vs 需求（"仿真跑通"≠"实验达标"，
+        # 差距必须回喂 LLM 调参重跑）----
         if validators:
             vchecks: list[dict] = []
             for v in validators:

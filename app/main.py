@@ -1,4 +1,4 @@
-"""FastAPI 入口：对话接口 + 同题对照裸调用接口 + 工作区端点 + 静态托管。  [W3]
+"""FastAPI 入口：对话接口 + 同题对照裸调用接口 + 工作区端点 + 静态托管。
 
 启动：uvicorn app.main:app --reload
   http://127.0.0.1:8000            -> static/index.html   产品对话页
@@ -6,7 +6,7 @@
   POST /chat      {session_id, message} -> 证据包 JSON（仿真在环）
   POST /demo/raw  {message}             -> 裸 LLM 回复（对照组，无仿真）
 
-工作区（ZCode/dsh 模型）：
+工作区：
   启动时经 VOLTPROOF_WORKSPACE 绑定（缺省 = 仓库 out/），运行中可经
   POST /api/ws/open 切换。agent 的所有产物与会话状态都落在当前工作区内。
   /api/files 只在当前工作区内取文件（路径守卫在 Workspace.resolve）。

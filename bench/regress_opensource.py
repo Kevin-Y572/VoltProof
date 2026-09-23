@@ -13,6 +13,7 @@ write out.raw all）——这也是产品"附件诊断"路径需要的通用适�
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 import time
@@ -27,7 +28,11 @@ from app.ngspice_runner import run_netlist  # noqa: E402
 from app.render_wave import render_wave  # noqa: E402
 from app.schematic_layout import render_netlist_schematic  # noqa: E402
 
-EXAMPLES = Path(r"D:\Users\Lenovo\tools\ngspice-47\Spice64\examples")
+_EXAMPLES_ENV = os.environ.get("VOLTPROOF_NGSPICE_EXAMPLES")
+if not _EXAMPLES_ENV:
+    sys.exit("请设 VOLTPROOF_NGSPICE_EXAMPLES 指向 ngspice 示例目录"
+             "（如 ngspice-47/Spice64/examples）")
+EXAMPLES = Path(_EXAMPLES_ENV)
 OUT = Path(__file__).resolve().parent / "regress_out"
 
 _ANALYSIS_RE = re.compile(r"^\s*\.(tran|ac|op|dc|noise|sp|pss|disto)\b(.*)$", re.I)

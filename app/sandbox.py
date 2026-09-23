@@ -1,6 +1,6 @@
 """LLM 生成代码的沙箱公共层（schemdraw / SKiDL 共用）。
 
-2026-09-21 安全审查：原 AST 检查只拦 os/sys 直属属性与 open/eval 等名字，
+安全审查发现：原 AST 检查只拦 os/sys 直属属性与 open/eval 等名字，
 `catch_warnings → __builtins__` dunder 链完全绕过（PoC 实测从"沙箱"内
 读出了环境变量里的 API Key）。加固两层：
   1. AST：拦截逃逸常用的 dunder 属性（__class__/__subclasses__/__globals__/

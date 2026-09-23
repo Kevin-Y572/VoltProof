@@ -8,12 +8,11 @@ out/
 *.raw
 ngspice.log
 
-# 本地密钥与扫描器状态
+# 本地密钥
 .env
 settings.json
-.mimosa/
 
-# IDE 与实验运行产物（证据太大，报告保留）
+# IDE 与本地运行产物
 .idea/
 bench/exp/
 bench/exp_run.log
@@ -27,8 +26,7 @@ bench/external/
 # 工作区内部状态（会话/缓存，随工作区归档，不入库）
 **/.cp/
 
-# 本地开发日志与可再生的跑批报告（保留在本地，不入公开仓库）
-docs/DEVLOG.md
+# 可经 run_bench.py 再生的本地跑批报告
 skidl_REPL.*
 bench/report*.md
 bench/regress_report.md

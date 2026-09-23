@@ -1,6 +1,6 @@
-"""综合实验（信号波形合成实验）能力测试跑批。
+"""信号波形合成实验能力测试跑批。
 
-任务集：bench/exp_tasks.json（提示词逐条来自《综合实验要求.docx》）。
+任务集：bench/exp_tasks.json（提示词逐条来自实验任务书）。
 执行方式与真实用户一致：T1 全新设计，T2-T4 走会话链（在上一轮验证通过的
 网表上继续修改），每任务留存完整证据到 bench/exp/<task_id>/。
 
@@ -42,7 +42,7 @@ def main() -> None:
         print(f"prompt: {t['prompt']}")
         t0 = time.monotonic()
         try:
-            # 综合实验电路（振荡+分频+滤波链）比 bench 任务重：放宽重试预算
+            # 实验电路（振荡+分频+滤波链）比 bench 任务重：放宽重试预算
             ev = run_pipeline(t["prompt"], previous_netlist=prev_netlist,
                               max_retries=5, validators=get_validators(t["id"]),
                               backend=backend)

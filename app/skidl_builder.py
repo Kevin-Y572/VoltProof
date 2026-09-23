@@ -1,6 +1,6 @@
 """SKiDL 代码 → SPICE 网表的受限执行构建器。  [双轨 backend="skidl"]
 
-动机（2026-09-19 综合实验结论）：LLM 写裸 SPICE 网表的失败大多来自方言陷阱
+动机：LLM 写裸 SPICE 网表的失败大多来自方言陷阱
 （浮空节点/单位/续行/行首字母/接线断链），事后靠 ngspice 报错回喂补救。
 SKiDL 是 MIT 的 Python"电路即代码"库：连接显式、数值就是数值，无格式陷阱。
 实测 skidl 2.3.0 的 skidl.pyspice 原语**不加载 PySpice**（GPL 红线无忧）。

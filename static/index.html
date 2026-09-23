@@ -204,7 +204,7 @@ function escapeHtml(s) {
 input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
 send_.addEventListener('click', send);
 
-// ---- 工作区（ZCode/dsh 模型：用户决定在哪个目录工作，产物全部留在其中）----
+// ---- 工作区（用户决定在哪个目录工作，产物全部留在其中）----
 async function loadWsInfo() {
   try {
     const d = await (await fetch('/api/ws')).json();
