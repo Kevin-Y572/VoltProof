@@ -26,3 +26,9 @@ bench/external/
 
 # 工作区内部状态（会话/缓存，随工作区归档，不入库）
 **/.cp/
+
+# 本地开发日志与可再生的跑批报告（保留在本地，不入公开仓库）
+docs/DEVLOG.md
+skidl_REPL.*
+bench/report*.md
+bench/regress_report.md
