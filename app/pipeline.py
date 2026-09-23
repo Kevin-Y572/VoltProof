@@ -22,6 +22,7 @@ from .ngspice_runner import run_netlist
 from .render_schematic import render_schematic
 from .render_wave import render_wave
 from .skidl_builder import build_netlist as skidl_build
+from .workspace import Workspace, default_workspace
 
 if TYPE_CHECKING:  # 只做类型标注，避免运行时循环依赖
     from .measure import Traces
@@ -31,7 +32,6 @@ Validator = Callable[["Evidence", "Traces | None"], list[dict]]
 
 MAX_RETRIES = 3
 SKIDL_BUILD_FIX = 2  # SKiDL 轨：代码层（执行报错）的修复轮数
-OUT_DIR = Path(__file__).resolve().parent.parent / "out"
 
 
 @dataclass
@@ -48,6 +48,8 @@ class Evidence:
     retry_log: list[dict] = field(default_factory=list)  # 每轮 {round, stage, problems}
     checks: list[dict] = field(default_factory=list)      # 验收明细 [{name, ok, detail}]
     generator_code: str = ""  # skidl 轨的生成代码（诊断用）
+    task_id: str = ""         # 本次运行在工作区内的任务目录名
+    task_dir: str = ""        # 任务产物目录绝对路径（sim/docs 各有同名子目录）
     elapsed: float = 0.0
 
     def to_dict(self) -> dict:
@@ -56,6 +58,8 @@ class Evidence:
             "request": self.request,
             "netlist": self.netlist,
             "generator_code": self.generator_code,
+            "task_id": self.task_id,
+            "task_dir": self.task_dir,
             "waveform_b64": self.waveform_b64,
             "schematic_b64": self.schematic_b64,
             "metrics": self.metrics,
@@ -74,14 +78,19 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
                  max_retries: int = MAX_RETRIES,
                  validators: list[Validator] | None = None,
                  backend: str = "spice",
-                 initial_netlist: str | None = None) -> Evidence:
+                 initial_netlist: str | None = None,
+                 workspace: Workspace | None = None) -> Evidence:
     """initial_netlist：用户上传的网表——跳过生成环节直接进"检查→仿真→
-    验收→修复"循环（诊断场景），验证通过后同样进入会话状态供后续修改。"""
+    验收→修复"循环（诊断场景），验证通过后同样进入会话状态供后续修改。
+    workspace：产物与会话状态落点；None 时用缺省工作区（仓库 out/），
+    bench/tests 等旧调用不受影响。"""
     from . import cache as _cache
+
+    ws = workspace or default_workspace()
 
     # 结果缓存：相同请求（无验收器）直接返回完整证据——演示防翻车（2.6 规划项）
     if validators is None and initial_netlist is None:
-        cached = _cache.get(request, previous_netlist, backend)
+        cached = _cache.get(request, previous_netlist, backend, cache_dir=ws.cache_dir)
         if cached is not None:
             ev = Evidence(**{k: v for k, v in cached.items()
                              if k in Evidence.__dataclass_fields__ and k != "elapsed"})
@@ -89,7 +98,10 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
             ev.retry_log.append({"round": 0, "stage": "cache", "problems": []})
             return ev
 
-    ev = Evidence(request=request)
+    task_id = ws.new_task_id()
+    sim_dir = ws.task_sim_dir(task_id)
+    doc_dir = ws.task_docs_dir(task_id)
+    ev = Evidence(request=request, task_id=task_id, task_dir=str(doc_dir))
     t0 = time.monotonic()
 
     if initial_netlist:
@@ -138,7 +150,7 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
             continue
 
         # ---- 仿真 ----
-        sim = run_netlist(netlist, workdir=OUT_DIR)
+        sim = run_netlist(netlist, workdir=sim_dir)
         if not sim.ok:
             ev.retry_log.append({"round": rnd, "stage": "simulate",
                                  "problems": [sim.error_snippet or "仿真失败且无报错文本"]})
@@ -168,7 +180,7 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
                 ev.retry_log.append({"round": rnd, "stage": "measure",
                                      "problems": [tr.warning]})  # 非致命，留痕
             ev.metrics = measure.extract_metrics(tr)
-            png = render_wave(tr, OUT_DIR / "wave.png", title=request[:40])
+            png = render_wave(tr, doc_dir / "wave.png", title=request[:40])
             ev.waveform_b64 = _b64_png(png)
         except Exception as e:  # 波形解析失败不致命，证据卡降级
             ev.retry_log.append({"round": rnd, "stage": "measure", "problems": [f"波形解析失败: {e}"]})
@@ -216,13 +228,13 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
         # 失败才回退 LLM 生成 schemdraw 代码的老路
         try:
             from .schematic_layout import render_netlist_schematic
-            png = render_netlist_schematic(netlist, OUT_DIR / "schematic.png",
+            png = render_netlist_schematic(netlist, doc_dir / "schematic.png",
                                            title=request[:24])
             if png is None:
                 code = llm.extract_code_block(
                     llm.chat(prompts.SCHEMATIC_SYSTEM, prompts.schematic_user(netlist))
                 )
-                png = render_schematic(code, OUT_DIR / "schematic.png")
+                png = render_schematic(code, doc_dir / "schematic.png")
             if png:
                 ev.schematic_b64 = _b64_png(png)
         except Exception:
@@ -232,8 +244,23 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
     ev.elapsed = time.monotonic() - t0
     ev.netlist = ev.netlist or netlist  # 失败时也保留最后版本，便于诊断
     if ev.ok and validators is None and initial_netlist is None:
-        _cache.put(request, previous_netlist, backend, ev.to_dict())
+        _cache.put(request, previous_netlist, backend, ev.to_dict(),
+                   cache_dir=ws.cache_dir)
+    _write_evidence_file(ev, doc_dir)
     return ev
+
+
+def _write_evidence_file(ev: Evidence, doc_dir: Path) -> None:
+    """证据 JSON 落盘（成败都写，失败样本是诊断素材）。剥掉 base64 大字段——
+    图已经是 docs/ 下的独立文件，JSON 里再放一份只是翻倍占空间。"""
+    d = ev.to_dict()
+    d.pop("waveform_b64", None)
+    d.pop("schematic_b64", None)
+    try:
+        (doc_dir / "evidence.json").write_text(
+            json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError:
+        pass  # 落盘失败不阻塞返回
 
 
 def _repair(netlist: str, problems: list[str]) -> str:
@@ -268,24 +295,36 @@ def _skidl_track(request: str, ev: "Evidence") -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# 会话（W3）：多轮修改作用于同一电路
+# 会话（W3）：多轮修改作用于同一电路。
+# 按工作区分键 + 落盘 .cp/state.json（内存 dict 只是热缓存，重启不丢）。
 # ---------------------------------------------------------------------------
 
-_SESSIONS: dict[str, dict] = {}
+_SESSIONS: dict[str, dict[str, dict]] = {}  # 工作区根路径 -> sid -> 会话
 
 
-def get_session(session_id: str | None = None) -> dict:
+def get_session(session_id: str | None = None,
+                workspace: Workspace | None = None) -> dict:
+    ws = workspace or default_workspace()
     sid = session_id or uuid.uuid4().hex[:12]
-    if sid not in _SESSIONS:
-        _SESSIONS[sid] = {"id": sid, "netlist": None, "history": []}
-    return _SESSIONS[sid]
+    store = _SESSIONS.setdefault(str(ws.root), ws.load_sessions())
+    if sid not in store:
+        store[sid] = {"id": sid, "netlist": None, "history": []}
+    return store[sid]
+
+
+def _save_sessions(workspace: Workspace) -> None:
+    store = _SESSIONS.get(str(workspace.root))
+    if store is not None:
+        workspace.save_sessions(store)
 
 
 def chat_with_session(session_id: str, message: str,
-                      attachment: dict | None = None) -> dict:
+                      attachment: dict | None = None,
+                      workspace: Workspace | None = None) -> dict:
     """attachment: {filename, content}——网表文件直接作为初始电路，文本文件
     内容并入需求。"""
-    s = get_session(session_id)
+    ws = workspace or default_workspace()
+    s = get_session(session_id, workspace=ws)
     message = message[:8000]  # 正文限长（防内存滥用）
     initial_netlist = None
     if attachment and attachment.get("content"):
@@ -296,11 +335,12 @@ def chat_with_session(session_id: str, message: str,
         else:
             message = f"{message}\n\n[附件 {attachment.get('filename', '')} 的内容]\n{attachment['content'][:4000]}"
     ev = run_pipeline(message, previous_netlist=initial_netlist or s["netlist"],
-                      initial_netlist=initial_netlist)
+                      initial_netlist=initial_netlist, workspace=ws)
     if ev.ok:
         s["netlist"] = ev.netlist  # 只有验证通过的电路才进入会话状态
     s["history"].append({"user": message, "ok": ev.ok,
                          "attachment": attachment and attachment.get("filename")})
+    _save_sessions(ws)
     d = ev.to_dict()
     d["session_id"] = s["id"]  # 空入参时客户端也能拿到新建的会话 id
     return d
@@ -323,5 +363,6 @@ if __name__ == "__main__":
     print(json.dumps({k: v for k, v in result.to_dict().items() if k != "waveform_b64"},
                      ensure_ascii=False, indent=2))
     if result.waveform_b64:
-        (OUT_DIR / "wave.png").exists() and print(f"\n波形图: {OUT_DIR / 'wave.png'}")
+        (Path(result.task_dir) / "wave.png").exists() and \
+            print(f"\n波形图: {Path(result.task_dir) / 'wave.png'}")
     sys.exit(0 if result.ok else 1)

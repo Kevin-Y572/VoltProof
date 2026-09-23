@@ -21,6 +21,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # 确保测试用本地 ngspice（同 test_offline 的约定，已在用户环境变量持久化）
 os.environ.setdefault("CIRCUITPILOT_NGSPICE",
                       "D:/Users/Lenovo/tools/ngspice-47/Spice64/bin/ngspice.exe")
+# LLM 设置指向临时文件：测试绝不读写真实 settings.json（里面可能有用户 Key）
+os.environ["CIRCUITPILOT_SETTINGS"] = str(
+    Path(__file__).resolve().parent / f"_llm_settings_test_{os.getpid()}.json")
 
 from unittest.mock import patch  # noqa: E402
 
@@ -85,9 +88,15 @@ class Scripted:
 
 def main() -> int:
     # 清结果缓存：多个用例共用同一请求文本，不能互相吃到缓存
+    # （缓存现在按工作区落在 out/.cp/cache）
     import shutil as _sh
     from pathlib import Path as _P
-    _sh.rmtree(_P(__file__).resolve().parent.parent / ".cache", ignore_errors=True)
+    ws_root = str(pipeline.default_workspace().root)
+
+    def sess(sid: str) -> dict:
+        return pipeline._SESSIONS[ws_root][sid]
+
+    _sh.rmtree(pipeline.default_workspace().cache_dir, ignore_errors=True)
     # ---- 1. 一次通过 ----
     with patch.object(llm, "chat", Scripted([GOOD, "解读：实测-3dB约1kHz。"])):
         ev = pipeline.run_pipeline("1kHz低通滤波器")
@@ -96,6 +105,9 @@ def main() -> int:
     check("一次通过: 有指标", len(ev.metrics) > 0, str(ev.metrics))
     check("一次通过: 有解读", "1kHz" in ev.interpretation)
     check("一次通过: 无重试", len([r for r in ev.retry_log if r["stage"] != "generate"]) == 0)
+    check("一次通过: 证据/产物落盘工作区任务目录",
+          bool(ev.task_dir) and (Path(ev.task_dir) / "evidence.json").exists()
+          and (Path(ev.task_dir) / "wave.png").exists(), str(ev.task_dir))
 
     # ---- 2. 静态检查失败 → 自动修复 ----
     sc = Scripted([NO_GROUND, GOOD, "解读：修复后通过。"])
@@ -114,7 +126,10 @@ def main() -> int:
     check("仿真修复: 记录了 simulate 轮", "simulate" in stages, str(stages))
 
     # ---- 4. 会话多轮：携带上一轮网表 ----
+    # 会话状态已持久化到工作区 state.json——内存与磁盘都要清，
+    # 否则上一次测试运行的 sess-test 被水合回来，历史条数翻倍
     pipeline._SESSIONS.clear()
+    pipeline.default_workspace().state_path.unlink(missing_ok=True)
     s1 = Scripted([GOOD, "第一轮解读。"])
     with patch.object(llm, "chat", s1):
         d1 = pipeline.chat_with_session("sess-test", "先做1kHz低通")
@@ -124,7 +139,10 @@ def main() -> int:
         d2 = pipeline.chat_with_session("sess-test", "把截止频率降到1kHz左右重选参数")
     gen_user2 = s2.calls[0][1]
     check("会话: 第二轮携带上轮网表", "当前网表" in gen_user2 and "V1 in 0" in gen_user2, gen_user2[:100])
-    check("会话: 历史两条", len(pipeline._SESSIONS["sess-test"]["history"]) == 2)
+    check("会话: 历史两条", len(sess("sess-test")["history"]) == 2)
+    check("会话: 状态落盘 state.json（重启可恢复）",
+          (pipeline.default_workspace().state_path).exists()
+          and "sess-test" in pipeline.default_workspace().load_sessions())
 
     # ---- 4b. 验收环：指标不达标 → 差距回喂 → 调参重跑 ----
     calls = {"n": 0}
@@ -161,12 +179,13 @@ def main() -> int:
 
     # ---- 4c. 附件网表：跳过生成直接进仿真（诊断场景） ----
     pipeline._SESSIONS.clear()
+    pipeline.default_workspace().state_path.unlink(missing_ok=True)
     with patch.object(llm, "chat", Scripted(["附件电路解读：实测-3dB约1kHz。"])) as sc_att:
         d_att = pipeline.chat_with_session("att-1", "帮我仿真验证这个电路", attachment={
             "filename": "my.cir", "content": GOOD.replace("```spice\n", "").replace("\n```", "")})
     check("附件: 网表直接仿真通过", d_att["ok"] is True, str(d_att.get("retry_log")))
     check("附件: 零次生成调用（跳过 LLM 生成）", len(sc_att.calls) == 1, f"{len(sc_att.calls)} 次")
-    check("附件: 网表进入会话状态", pipeline._SESSIONS["att-1"]["netlist"] is not None)
+    check("附件: 网表进入会话状态", sess("att-1")["netlist"] is not None)
     check("附件: 文本附件并入需求",
           pipeline._looks_like_netlist("note.txt", "设计一个放大器") is False
           and pipeline._looks_like_netlist("a.cir", "任意") is True
@@ -225,7 +244,7 @@ write out.raw v(out)
     # ---- 4f. 结果缓存：相同请求第二次零 LLM 调用 ----
     import shutil as _sh
     from pathlib import Path as _P
-    _sh.rmtree(_P(__file__).resolve().parent.parent / ".cache", ignore_errors=True)
+    _sh.rmtree(pipeline.default_workspace().cache_dir, ignore_errors=True)
     sc_c1 = Scripted([GOOD, "缓存测试解读。"])
     with patch.object(llm, "chat", sc_c1):
         pipeline.run_pipeline("缓存测试电路")
@@ -262,6 +281,53 @@ write out.raw v(out)
             TestClient(app) as client:
         r = client.post("/demo/raw", json={"message": "设计1kHz低通"})
         check("POST /demo/raw 200", r.status_code == 200 and "裸模型" in r.json()["text"])
+
+    # ---- 5b. 工作区端点 ----
+    import tempfile
+    with TestClient(app) as client:
+        r = client.get("/api/ws")
+        d = r.json()
+        check("GET /api/ws 返回当前工作区", r.status_code == 200 and d.get("root"), str(d))
+        check("GET /api/ws/tasks 列出历史任务",
+              r.status_code == 200 and isinstance(client.get("/api/ws/tasks").json().get("tasks"), list))
+        tid = ev.task_id  # 用第 1 节落盘的任务取文件
+        r = client.get(f"/api/files/{tid}/evidence.json")
+        check("GET /api/files 取到任务证据", r.status_code == 200 and b"netlist" in r.content[:400])
+        r = client.get(f"/api/files/{tid}/../../app/llm.py")
+        check("GET /api/files 路径逃逸被拒", r.status_code in (403, 404), str(r.status_code))
+        ws_tmp = tempfile.mkdtemp(prefix="cp_ws_test_")
+        r = client.post("/api/ws/open", json={"path": ws_tmp})
+        check("POST /api/ws/open 切换到新目录",
+              r.status_code == 200 and r.json().get("root"), str(r.json()))
+        r = client.get("/api/ws")
+        check("切换后 /api/ws 指向新工作区", r.json().get("root") == str(Path(ws_tmp).resolve()), str(r.json()))
+        r = client.post("/api/ws/open", json={"path": "D:\\不存在的目录_xyz"})
+        check("POST /api/ws/open 拒绝不存在目录", r.status_code == 400)
+        r = client.post("/api/ws/open", json={"path": str(pipeline.default_workspace().root)})
+        check("切回缺省工作区", r.status_code == 200)
+
+    # ---- 5c. 大模型配置端点（供应商 URL / Key / 模型）----
+    _orig_model = llm._MODEL
+    try:
+        with TestClient(app) as client:
+            r = client.get("/api/llm/config")
+            d = r.json()
+            check("LLM端点: GET /api/llm/config 返回脱敏配置",
+                  r.status_code == 200 and d.get("model") and d.get("base_url")
+                  and d.get("api_key") is None, str(d))
+            r = client.post("/api/llm/config", json={"base_url": "http://127.0.0.1:9/v1"})
+            check("LLM端点: 内网 URL 被 SSRF 校验拒绝（400 且状态不变）",
+                  r.status_code == 400 and "内网" in r.json().get("error", ""))
+            r = client.post("/api/llm/config", json={"model": "mock-model-tmp"})
+            check("LLM端点: 只改模型成功并回显",
+                  r.status_code == 200 and r.json().get("model") == "mock-model-tmp")
+            check("LLM端点: 模型切换已重置客户端", llm._client is None)
+            r = client.post("/api/llm/models", json={"base_url": "http://169.254.169.254/v1"})
+            check("LLM端点: models 拉取同样过 SSRF 校验", r.status_code == 400)
+    finally:
+        llm._MODEL = _orig_model
+        llm._client = None
+        Path(os.environ["CIRCUITPILOT_SETTINGS"]).unlink(missing_ok=True)
 
     # ---- 6. 电路图受限执行 ----
     from app.render_schematic import _has_content, render_schematic

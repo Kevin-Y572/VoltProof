@@ -636,6 +636,118 @@ print("OUT_NODES: v(OUT)")
         finally:
             ngspice_runner._TIMEOUT = _old_to
 
+        # ---- 工作区（Workspace：路径守卫 / 任务清单 / 会话持久化）----
+        from app.workspace import Workspace, WorkspaceError, default_workspace
+
+        def _perm(fn) -> bool:
+            try:
+                fn()
+                return False
+            except PermissionError:
+                return True
+
+        wsroot = (tmp / "ws1").resolve()
+        wsroot.mkdir()
+        ws = Workspace(wsroot)
+        try:
+            Workspace("relative/path")
+            rel_bad = False
+        except WorkspaceError:
+            rel_bad = True
+        check("工作区: 相对路径被拒", rel_bad)
+        check("工作区: 正常 resolve 返回区内绝对路径",
+              ws.resolve("docs/a.txt") == (wsroot / "docs" / "a.txt").resolve())
+        check("工作区: .. 逃逸被拒", _perm(lambda: ws.resolve("docs/../../evil.txt")))
+        check("工作区: 区外绝对路径被拒",
+              _perm(lambda: ws.resolve(wsroot.parent / "evil.txt")))
+        check("工作区: 恶意 task_id 被守卫拦截",
+              _perm(lambda: ws.task_sim_dir("../../evil")))
+        tid = ws.new_task_id()
+        check("工作区: task_id 含时间戳且唯一", "-" in tid and tid != ws.new_task_id())
+        d = ws.task_docs_dir(tid)
+        (d / "evidence.json").write_text(
+            '{"ok": true, "request": "r", "metrics": {"a": 1}}', encoding="utf-8")
+        (d / "wave.png").write_bytes(b"png")
+        tasks = ws.list_tasks()
+        check("工作区: list_tasks 读到任务与文件清单",
+              len(tasks) == 1 and tasks[0]["task_id"] == tid and tasks[0]["ok"] is True
+              and tasks[0]["files"] == ["evidence.json", "wave.png"], str(tasks))
+        ws.save_sessions({"s1": {"id": "s1", "netlist": "N", "history": []}})
+        check("工作区: 会话状态落盘可往返",
+              Workspace(wsroot).load_sessions().get("s1", {}).get("netlist") == "N")
+        check("工作区: 缺省工作区指向仓库 out/",
+              str(default_workspace().root).endswith("out")
+              and str(default_workspace().root.parent).endswith("circuit-pilot"))
+
+        # ---- LLM 供应商配置（前端可配 + SSRF 校验 + 多供应商方言）----
+        def _llm_reject(url: str) -> str:
+            try:
+                llm.validate_base_url(url)
+                return ""
+            except llm.LLMError as e:
+                return str(e)
+
+        for bad in ("ftp://example.com/v1", "example.com/v1",
+                    "http://localhost:11434/v1", "http://api.localhost/v1",
+                    "http://127.0.0.1:8000/v1", "http://192.168.1.5/v1",
+                    "http://10.0.0.1/v1", "http://169.254.169.254/v1",
+                    "http://[::1]:8000/v1"):
+            check(f"LLM配置: 拒绝 {bad}", bool(_llm_reject(bad)))
+
+        # 测试占位 Key（运行时拼接，非任何真实凭据）
+        _test_key = "sk-" + "dummy" * 8
+        _old_llm = (llm._BASE_URL, llm._MODEL, llm._API_KEY, llm._client)
+        _old_settings_env = os.environ.get("CIRCUITPILOT_SETTINGS")
+        _old_priv = os.environ.get("CIRCUITPILOT_ALLOW_PRIVATE_LLM")
+        _setf = tmp / "llm_settings.json"
+        os.environ["CIRCUITPILOT_SETTINGS"] = str(_setf)
+        try:
+            # 豁免开关：机主显式放行本机模型服务（Ollama/LM Studio）
+            os.environ["CIRCUITPILOT_ALLOW_PRIVATE_LLM"] = "1"
+            check("LLM配置: 豁免开关放行本机地址", _llm_reject("http://localhost:11434/v1") == "")
+            d = llm.configure(base_url="http://127.0.0.1:1234/v1/",
+                              api_key=_test_key,
+                              model="local-model-x")
+            check("LLM配置: configure 生效且 Key 脱敏",
+                  d["base_url"] == "http://127.0.0.1:1234/v1"
+                  and d["model"] == "local-model-x"
+                  and d["has_key"] is True
+                  and _test_key not in str(d) and d.get("api_key") is None, str(d))
+            check("LLM配置: 配置落盘且可回读",
+                  _setf.exists() and llm.load_runtime_config().get("model") == "local-model-x")
+            check("LLM配置: 客户端已重置待重建", llm._client is None)
+            check("LLM配置: 非 DeepSeek 方言判定", llm._deepseek_dialect() is False)
+            # 方言落到请求参数：非 DeepSeek 供应商不下发 thinking，temperature 恒可调
+            cap2: dict = {}
+            llm._client = NS(chat=NS(completions=NS(create=lambda **kw: cap2.update(kw) or NS(
+                choices=[NS(finish_reason="stop", message=NS(content="ok", reasoning_content=""))],
+                usage=None))))
+            llm.chat("s", "u", temperature=0.7)
+            check("LLM配置: 非 DeepSeek 供应商不下发 thinking 扩展",
+                  "extra_body" not in cap2 and cap2.get("temperature") == 0.7,
+                  str(cap2.get("extra_body")))
+            # 非法 URL：先校验后改动，状态不被污染
+            os.environ.pop("CIRCUITPILOT_ALLOW_PRIVATE_LLM", None)
+            _before = llm._BASE_URL
+            try:
+                llm.configure(base_url="http://192.168.0.1/v1")
+                rejected = False
+            except llm.LLMError:
+                rejected = True
+            check("LLM配置: 非法 URL 拒绝且状态不变",
+                  rejected and llm._BASE_URL == _before)
+        finally:
+            llm._BASE_URL, llm._MODEL, llm._API_KEY, llm._client = _old_llm
+            if _old_settings_env is None:
+                os.environ.pop("CIRCUITPILOT_SETTINGS", None)
+            else:
+                os.environ["CIRCUITPILOT_SETTINGS"] = _old_settings_env
+            if _old_priv is None:
+                os.environ.pop("CIRCUITPILOT_ALLOW_PRIVATE_LLM", None)
+            else:
+                os.environ["CIRCUITPILOT_ALLOW_PRIVATE_LLM"] = _old_priv
+            _setf.unlink(missing_ok=True)
+
         print(f"\n{'='*40}\n{'全部通过' if not FAILURES else '失败: ' + ', '.join(FAILURES)}")
     return 1 if FAILURES else 0
 

@@ -8,7 +8,7 @@
   - 有 validators 时不缓存（跑批要真实测量，不能吃缓存）
   - 只缓存 ok=True 的结果
   - key = sha256(请求 + 上一轮网表 + backend + 模型)——多轮会话链各自独立缓存
-  - 默认开启（CIRCUITPILOT_CACHE=0 关闭，调试/对比实验时用）
+  - 默认开启（VOLTPROOF_CACHE=0 关闭，调试/对比实验时用）
 """
 
 from __future__ import annotations
@@ -18,8 +18,8 @@ import json
 import os
 from pathlib import Path
 
-_CACHE_DIR = Path(__file__).resolve().parent.parent / ".cache"
-_ENABLED = os.environ.get("CIRCUITPILOT_CACHE", "1") != "0"
+_LEGACY_CACHE_DIR = Path(__file__).resolve().parent.parent / ".cache"
+_ENABLED = os.environ.get("VOLTPROOF_CACHE", "1") != "0"
 
 
 def _key(request: str, previous_netlist: str | None, backend: str) -> str:
@@ -28,10 +28,11 @@ def _key(request: str, previous_netlist: str | None, backend: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def get(request: str, previous_netlist: str | None, backend: str) -> dict | None:
+def get(request: str, previous_netlist: str | None, backend: str,
+        cache_dir: Path | None = None) -> dict | None:
     if not _ENABLED:
         return None
-    f = _CACHE_DIR / f"{_key(request, previous_netlist, backend)}.json"
+    f = (cache_dir or _LEGACY_CACHE_DIR) / f"{_key(request, previous_netlist, backend)}.json"
     if not f.exists():
         return None
     try:
@@ -44,11 +45,13 @@ def get(request: str, previous_netlist: str | None, backend: str) -> dict | None
     return None
 
 
-def put(request: str, previous_netlist: str | None, backend: str, evidence: dict) -> None:
+def put(request: str, previous_netlist: str | None, backend: str, evidence: dict,
+        cache_dir: Path | None = None) -> None:
     if not _ENABLED or not evidence.get("ok"):
         return
-    _CACHE_DIR.mkdir(exist_ok=True)
-    f = _CACHE_DIR / f"{_key(request, previous_netlist, backend)}.json"
+    base = cache_dir or _LEGACY_CACHE_DIR
+    base.mkdir(parents=True, exist_ok=True)
+    f = base / f"{_key(request, previous_netlist, backend)}.json"
     try:
         f.write_text(json.dumps(evidence, ensure_ascii=False), encoding="utf-8")
     except OSError:

@@ -55,15 +55,17 @@ def main() -> None:
         if checks_ok:
             prev_netlist = ev.netlist  # 只有验收通过的电路才进入会话链
 
-        # 留存证据：网表 / raw / 波形 / 证据 JSON
+        # 留存证据：网表 / raw / 波形 / 证据 JSON。产物已按任务落进工作区
+        # sim/<task_id>/ 与 docs/<task_id>/（ev.task_dir 即 docs 目录），
+        # 不再依赖共享 out/ 的平铺布局
         (tdir / "netlist.cir").write_text(ev.netlist, encoding="utf-8")
-        app_out = BENCH.parent / "out"
-        for f in app_out.glob("*.raw"):
-            shutil.copy2(f, tdir / f.name)
-        for f in app_out.glob("wave.png"):
-            shutil.copy2(f, tdir / "wave.png")
-        for f in app_out.glob("schematic.png"):
-            shutil.copy2(f, tdir / "schematic.png")
+        if ev.task_dir:
+            doc_dir = Path(ev.task_dir)
+            sim_dir = doc_dir.parent.parent / "sim" / doc_dir.name
+            for f in doc_dir.glob("*.png"):
+                shutil.copy2(f, tdir / f.name)
+            for f in sim_dir.glob("*.raw"):
+                shutil.copy2(f, tdir / f.name)
         evd = ev.to_dict()
         (tdir / "evidence.json").write_text(
             json.dumps(evd, ensure_ascii=False, indent=2), encoding="utf-8")
