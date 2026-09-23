@@ -14,8 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bench"))
 
-os.environ.setdefault("CIRCUITPILOT_NGSPICE",
-                      "D:/Users/Lenovo/tools/ngspice-47/Spice64/bin/ngspice.exe")
+# ngspice 须在 PATH 中，或设 VOLTPROOF_NGSPICE 指向 ngspice.exe（见 README）
 
 from bench_validators import VALIDATORS  # noqa: E402
 from app.measure import load_traces  # noqa: E402

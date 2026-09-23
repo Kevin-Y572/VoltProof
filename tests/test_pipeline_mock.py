@@ -18,11 +18,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-# 确保测试用本地 ngspice（同 test_offline 的约定，已在用户环境变量持久化）
-os.environ.setdefault("CIRCUITPILOT_NGSPICE",
-                      "D:/Users/Lenovo/tools/ngspice-47/Spice64/bin/ngspice.exe")
+# ngspice 须在 PATH 中，或设 VOLTPROOF_NGSPICE 指向 ngspice.exe（见 README）
 # LLM 设置指向临时文件：测试绝不读写真实 settings.json（里面可能有用户 Key）
-os.environ["CIRCUITPILOT_SETTINGS"] = str(
+os.environ["VOLTPROOF_SETTINGS"] = str(
     Path(__file__).resolve().parent / f"_llm_settings_test_{os.getpid()}.json")
 
 from unittest.mock import patch  # noqa: E402
@@ -266,7 +264,7 @@ write out.raw v(out)
 
     with TestClient(app) as client:
         r = client.get("/")
-        check("GET / 返回对话页", r.status_code == 200 and "CircuitPilot" in r.text)
+        check("GET / 返回对话页", r.status_code == 200 and "VoltProof" in r.text)
         r = client.get("/compare.html")
         check("GET /compare.html 返回对照页", r.status_code == 200 and "同题对照" in r.text)
 
@@ -327,7 +325,7 @@ write out.raw v(out)
     finally:
         llm._MODEL = _orig_model
         llm._client = None
-        Path(os.environ["CIRCUITPILOT_SETTINGS"]).unlink(missing_ok=True)
+        Path(os.environ["VOLTPROOF_SETTINGS"]).unlink(missing_ok=True)
 
     # ---- 6. 电路图受限执行 ----
     from app.render_schematic import _has_content, render_schematic

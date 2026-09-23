@@ -11,8 +11,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-os.environ.setdefault("CIRCUITPILOT_NGSPICE",
-                      "D:/Users/Lenovo/tools/ngspice-47/Spice64/bin/ngspice.exe")
+# ngspice 须在 PATH 中，或设 VOLTPROOF_NGSPICE 指向 ngspice.exe（见 README）
 
 from app.pipeline import run_pipeline  # noqa: E402
 

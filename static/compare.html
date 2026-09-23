@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>同题对照 —— 直接问 AI vs CircuitPilot</title>
+<title>同题对照 —— 直接问 AI vs VoltProof</title>
 <style>
   :root { --bg:#0f1117; --card:#181b24; --line:#2a2f3d; --text:#e6e8ee; --dim:#9aa1b2; --acc:#4f8cff; --ok:#3fb96f; --warn:#e6a23c; }
   * { box-sizing:border-box; margin:0; padding:0; }
@@ -30,7 +30,7 @@
 </head>
 <body>
 <h1>同题对照：同一个问题，两种回答</h1>
-<div class="sub">左侧：直接问大模型（只得到文字） · 右侧：CircuitPilot（每个数字都来自 ngspice 实测）</div>
+<div class="sub">左侧：直接问大模型（只得到文字） · 右侧：VoltProof（每个数字都来自 ngspice 实测）</div>
 
 <div class="bar">
   <input id="q" value="设计一个截止频率1kHz的RC低通滤波器，并告诉我它的实际增益特性">
@@ -44,7 +44,7 @@
     <div id="l-body"></div>
   </div>
   <div class="panel right">
-    <h2>CircuitPilot（仿真在环）</h2>
+    <h2>VoltProof（仿真在环）</h2>
     <div class="status" id="r-status">等待运行</div>
     <div id="r-body"></div>
   </div>

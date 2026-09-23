@@ -13,11 +13,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-# 本机 ngspice 安装位置（已 setx 到用户环境变量，此处兜底保证测试可独立运行）
+# ngspice 须在 PATH 中，或设 VOLTPROOF_NGSPICE 指向 ngspice.exe（见 README）
 import os
-
-os.environ.setdefault("CIRCUITPILOT_NGSPICE",
-                      "D:/Users/Lenovo/tools/ngspice-47/Spice64/bin/ngspice.exe")
 
 from app import checks, llm, measure  # noqa: E402
 from app.ngspice_runner import run_netlist  # noqa: E402
@@ -298,9 +295,9 @@ def main() -> int:
                 check("llm: 非法 user_id 被拒", False)
             except ValueError:
                 check("llm: 非法 user_id 被拒", True)
-            llm.chat("sys", "usr", user_id="circuit-pilot_01")
+            llm.chat("sys", "usr", user_id="voltproof_01")
             check("llm: 合法 user_id 经 extra_body 下发",
-                  cap["extra_body"].get("user_id") == "circuit-pilot_01")
+                  cap["extra_body"].get("user_id") == "voltproof_01")
 
             # 空 content 回落含代码块的 reasoning_content（推理模型实测行为）
             llm._client = _mk_client(cap, resp=NS(
@@ -677,7 +674,7 @@ print("OUT_NODES: v(OUT)")
               Workspace(wsroot).load_sessions().get("s1", {}).get("netlist") == "N")
         check("工作区: 缺省工作区指向仓库 out/",
               str(default_workspace().root).endswith("out")
-              and str(default_workspace().root.parent).endswith("circuit-pilot"))
+              and str(default_workspace().root.parent).endswith("voltproof"))
 
         # ---- LLM 供应商配置（前端可配 + SSRF 校验 + 多供应商方言）----
         def _llm_reject(url: str) -> str:
@@ -697,13 +694,13 @@ print("OUT_NODES: v(OUT)")
         # 测试占位 Key（运行时拼接，非任何真实凭据）
         _test_key = "sk-" + "dummy" * 8
         _old_llm = (llm._BASE_URL, llm._MODEL, llm._API_KEY, llm._client)
-        _old_settings_env = os.environ.get("CIRCUITPILOT_SETTINGS")
-        _old_priv = os.environ.get("CIRCUITPILOT_ALLOW_PRIVATE_LLM")
+        _old_settings_env = os.environ.get("VOLTPROOF_SETTINGS")
+        _old_priv = os.environ.get("VOLTPROOF_ALLOW_PRIVATE_LLM")
         _setf = tmp / "llm_settings.json"
-        os.environ["CIRCUITPILOT_SETTINGS"] = str(_setf)
+        os.environ["VOLTPROOF_SETTINGS"] = str(_setf)
         try:
             # 豁免开关：机主显式放行本机模型服务（Ollama/LM Studio）
-            os.environ["CIRCUITPILOT_ALLOW_PRIVATE_LLM"] = "1"
+            os.environ["VOLTPROOF_ALLOW_PRIVATE_LLM"] = "1"
             check("LLM配置: 豁免开关放行本机地址", _llm_reject("http://localhost:11434/v1") == "")
             d = llm.configure(base_url="http://127.0.0.1:1234/v1/",
                               api_key=_test_key,
@@ -727,7 +724,7 @@ print("OUT_NODES: v(OUT)")
                   "extra_body" not in cap2 and cap2.get("temperature") == 0.7,
                   str(cap2.get("extra_body")))
             # 非法 URL：先校验后改动，状态不被污染
-            os.environ.pop("CIRCUITPILOT_ALLOW_PRIVATE_LLM", None)
+            os.environ.pop("VOLTPROOF_ALLOW_PRIVATE_LLM", None)
             _before = llm._BASE_URL
             try:
                 llm.configure(base_url="http://192.168.0.1/v1")
@@ -739,13 +736,13 @@ print("OUT_NODES: v(OUT)")
         finally:
             llm._BASE_URL, llm._MODEL, llm._API_KEY, llm._client = _old_llm
             if _old_settings_env is None:
-                os.environ.pop("CIRCUITPILOT_SETTINGS", None)
+                os.environ.pop("VOLTPROOF_SETTINGS", None)
             else:
-                os.environ["CIRCUITPILOT_SETTINGS"] = _old_settings_env
+                os.environ["VOLTPROOF_SETTINGS"] = _old_settings_env
             if _old_priv is None:
-                os.environ.pop("CIRCUITPILOT_ALLOW_PRIVATE_LLM", None)
+                os.environ.pop("VOLTPROOF_ALLOW_PRIVATE_LLM", None)
             else:
-                os.environ["CIRCUITPILOT_ALLOW_PRIVATE_LLM"] = _old_priv
+                os.environ["VOLTPROOF_ALLOW_PRIVATE_LLM"] = _old_priv
             _setf.unlink(missing_ok=True)
 
         print(f"\n{'='*40}\n{'全部通过' if not FAILURES else '失败: ' + ', '.join(FAILURES)}")

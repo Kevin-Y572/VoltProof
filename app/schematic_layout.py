@@ -27,7 +27,7 @@ from pathlib import Path
 
 from . import checks as _checks
 
-_DOT = os.environ.get("CIRCUITPILOT_DOT",
+_DOT = os.environ.get("VOLTPROOF_DOT",
                       r"C:\Program Files\Graphviz\bin\dot.exe")
 
 # 元件引脚数（用于布局/渲染分类；不在表内的按 2 端处理）

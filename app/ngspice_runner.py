@@ -1,6 +1,6 @@
 """ngspice 子进程执行器。一律命令行调用（进程隔离，无 GPL 传染）。  [W1]
 
-Windows 下若 ngspice 不在 PATH，设环境变量 CIRCUITPILOT_NGSPICE 指向 ngspice.exe。
+Windows 下若 ngspice 不在 PATH，设环境变量 VOLTPROOF_NGSPICE 指向 ngspice.exe。
 
 经验（ngspice-47 Windows 实测）：batch 模式下仿真失败往往退出码仍是 0、stdout 为空，
 报错只写进 -o 指定的日志文件，而且失败电路也可能产出全零的 raw 文件。
@@ -18,10 +18,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-_NGSPICE = os.environ.get("CIRCUITPILOT_NGSPICE", "ngspice")
+_NGSPICE = os.environ.get("VOLTPROOF_NGSPICE", "ngspice")
 # 超时可覆盖；默认 30s：正常的 tran 远快于此，收敛死循环 30s 也救不回来，
 # 卡满 60s 只是烧掉重试预算（综合实验曾一电路拖满 4×60s）
-_TIMEOUT = int(os.environ.get("CIRCUITPILOT_SIM_TIMEOUT", "30"))
+_TIMEOUT = int(os.environ.get("VOLTPROOF_SIM_TIMEOUT", "30"))
 
 # 安全过滤（2026-09-21 审查发现）：ngspice .control 块支持 shell 等系统命令，
 # 用户/LLM 网表可借此执行任意系统命令（实测 PoC 成功）——一律拒绝。
@@ -176,7 +176,7 @@ def run_netlist(netlist_text: str, workdir: str | Path | None = None) -> SimResu
     # resolve 成绝对路径再派生子进程：Windows CreateProcess 会切换子进程
     # cwd，相对的 -o/网表参数随之失效（实测：静默空跑 + rc!=0，日志停在旧文件）
     workdir = (Path(workdir) if workdir
-               else Path(tempfile.mkdtemp(prefix="circuitpilot_"))).resolve()
+               else Path(tempfile.mkdtemp(prefix="voltproof_"))).resolve()
     workdir.mkdir(parents=True, exist_ok=True)
     for old in workdir.glob("*.raw"):
         old.unlink()  # 防旧产物污染：workdir 复用时绝不能把上次的 raw 当本次结果
