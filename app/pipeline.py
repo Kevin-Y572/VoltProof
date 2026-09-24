@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -51,10 +52,12 @@ class Evidence:
     task_id: str = ""         # 本次运行在工作区内的任务目录名
     task_dir: str = ""        # 任务产物目录绝对路径（sim/docs 各有同名子目录）
     elapsed: float = 0.0
+    rejected: bool = False  # 领域守卫前置拒绝（与仿真失败区分）
 
     def to_dict(self) -> dict:
         return {
             "ok": self.ok,
+            "rejected": self.rejected,
             "request": self.request,
             "netlist": self.netlist,
             "generator_code": self.generator_code,
@@ -74,6 +77,36 @@ def _b64_png(png: Path) -> str:
     return base64.b64encode(png.read_bytes()).decode()
 
 
+# 领域守卫：数字逻辑（Verilog/RTL）类需求不在能力范围——本工具做的是
+# 模拟电路 + SPICE 仿真。前置拒绝（零 LLM/仿真消耗），而不是让修复环
+# 烧完重试预算后给一张莫名的失败卡
+_RTL_GUARD_RE = re.compile(
+    r"verilog|systemverilog|vhdl|\bfpga\b|\brtl\b|可综合|always\s*@|testbench",
+    re.IGNORECASE)
+
+_GUARD_INTERP = (
+    "这个需求属于数字逻辑设计（Verilog / RTL）范畴，超出了 VoltProof 的能力范围。\n"
+    "VoltProof 做的是模拟电路：自然语言描述电路需求 → 生成 SPICE 网表 → ngspice 仿真验证，"
+    "输出波形、实测指标与原理图。\n"
+    "建议：Verilog 实现请使用数字设计工具链（iverilog / Verilator 等）；"
+    "如果题目背后有模拟部分（传感器信号调理、比较器阈值、滤波放大），"
+    "欢迎改用电路语言描述，例如：设计一个温度报警电路，输入电压超过 2V 时"
+    "输出翻转为高电平并带迟滞。"
+)
+
+
+def _domain_guard(request: str) -> Evidence | None:
+    """命中数字 RTL 关键词时立即返回拒绝证据（不进生成/仿真环）。"""
+    if not _RTL_GUARD_RE.search(request):
+        return None
+    return Evidence(
+        request=request, ok=False, rejected=True, elapsed=0.0,
+        interpretation=_GUARD_INTERP,
+        retry_log=[{"round": 0, "stage": "guard",
+                    "problems": ["数字逻辑/RTL 需求，已前置拒绝（未调用生成与仿真）"]}],
+    )
+
+
 def run_pipeline(request: str, previous_netlist: str | None = None,
                  max_retries: int = MAX_RETRIES,
                  validators: list[Validator] | None = None,
@@ -88,7 +121,11 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
 
     ws = workspace or default_workspace()
 
-    # 结果缓存：相同请求（无验收器）直接返回完整证据——演示防翻车（2.6 规划项）
+    guard = _domain_guard(request)
+    if guard is not None:
+        return guard
+
+    # 结果缓存：相同请求（无验收器）直接返回完整证据——演示防翻车
     if validators is None and initial_netlist is None:
         cached = _cache.get(request, previous_netlist, backend, cache_dir=ws.cache_dir)
         if cached is not None:

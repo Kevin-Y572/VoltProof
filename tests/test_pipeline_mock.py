@@ -95,6 +95,25 @@ def main() -> int:
         return pipeline._SESSIONS[ws_root][sid]
 
     _sh.rmtree(pipeline.default_workspace().cache_dir, ignore_errors=True)
+
+    # ---- 0. 领域守卫：数字 RTL 需求前置拒绝，零消耗 ----
+    class _Boom:
+        def __call__(self, *a, **kw):
+            raise AssertionError("守卫请求不应调用 LLM")
+
+    with patch.object(llm, "chat", _Boom()):
+        ev = pipeline.run_pipeline(
+            "请用可综合的 Verilog 实现以下模块。模块名：temp_alarm，端口：clk, rst_n, temp[7:0]")
+    check("领域守卫: 前置拒绝且不调 LLM",
+          ev.rejected is True and ev.ok is False, str(ev.retry_log))
+    check("领域守卫: 零消耗（无网表/无波形/秒回）",
+          ev.netlist == "" and ev.waveform_b64 is None and ev.elapsed < 1)
+    check("领域守卫: 解读给出能力边界与改问建议",
+          "模拟电路" in ev.interpretation and "Verilog" in ev.interpretation)
+    check("领域守卫: 正常电路需求不误伤",
+          pipeline._domain_guard("设计桥式整流+电容滤波电路，纹波<1V") is None
+          and pipeline._domain_guard("用 FPGA 产生 1kHz 时钟") is not None)
+
     # ---- 1. 一次通过 ----
     with patch.object(llm, "chat", Scripted([GOOD, "解读：实测-3dB约1kHz。"])):
         ev = pipeline.run_pipeline("1kHz低通滤波器")
