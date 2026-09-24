@@ -91,8 +91,8 @@ def main() -> int:
     from pathlib import Path as _P
     ws_root = str(pipeline.default_workspace().root)
 
-    def sess(sid: str) -> dict:
-        return pipeline._SESSIONS[ws_root][sid]
+    def conv(cid: str) -> dict:
+        return pipeline._CONVERSATIONS[ws_root][cid]
 
     _sh.rmtree(pipeline.default_workspace().cache_dir, ignore_errors=True)
 
@@ -142,24 +142,35 @@ def main() -> int:
     stages = [r["stage"] for r in ev.retry_log]
     check("仿真修复: 记录了 simulate 轮", "simulate" in stages, str(stages))
 
-    # ---- 4. 会话多轮：携带上一轮网表 ----
-    # 会话状态已持久化到工作区 state.json——内存与磁盘都要清，
-    # 否则上一次测试运行的 sess-test 被水合回来，历史条数翻倍
-    pipeline._SESSIONS.clear()
+    # ---- 4. 对话多轮：携带上一轮网表，可关闭后恢复 ----
+    # 对话状态已持久化到工作区 state.json——内存与磁盘都要清，
+    # 否则上一次测试运行的 conv-test 被水合回来，消息条数翻倍
+    pipeline._CONVERSATIONS.clear()
     pipeline.default_workspace().state_path.unlink(missing_ok=True)
     s1 = Scripted([GOOD, "第一轮解读。"])
     with patch.object(llm, "chat", s1):
-        d1 = pipeline.chat_with_session("sess-test", "先做1kHz低通")
-    check("会话: 第一轮返回 session_id", d1["session_id"] == "sess-test")
+        d1 = pipeline.chat_with_conversation("conv-test", "先做1kHz低通")
+    check("对话: 第一轮返回 conversation_id", d1["conversation_id"] == "conv-test")
     s2 = Scripted([GOOD.replace("1.59k", "8k").replace("100n", "20n"), "第二轮解读。"])
     with patch.object(llm, "chat", s2):
-        d2 = pipeline.chat_with_session("sess-test", "把截止频率降到1kHz左右重选参数")
+        d2 = pipeline.chat_with_conversation("conv-test", "把截止频率改到10kHz重选参数")
     gen_user2 = s2.calls[0][1]
-    check("会话: 第二轮携带上轮网表", "当前网表" in gen_user2 and "V1 in 0" in gen_user2, gen_user2[:100])
-    check("会话: 历史两条", len(sess("sess-test")["history"]) == 2)
-    check("会话: 状态落盘 state.json（重启可恢复）",
+    check("对话: 第二轮携带上轮网表", "当前网表" in gen_user2 and "V1 in 0" in gen_user2, gen_user2[:100])
+    check("对话: 消息流四条（两轮问答）", len(conv("conv-test")["messages"]) == 4)
+    check("对话: 状态落盘 state.json（重启可恢复）",
           (pipeline.default_workspace().state_path).exists()
-          and "sess-test" in pipeline.default_workspace().load_sessions())
+          and "conv-test" in pipeline.default_workspace().load_conversations())
+    # 恢复：消息流完整还原，证据卡从任务档案重建（图片转文件 URL）
+    restored = pipeline.restore_conversation("conv-test")
+    check("对话: 恢复重建消息流与证据",
+          restored is not None and len(restored["messages"]) == 4
+          and restored["messages"][1]["evidence"]["ok"] is True
+          and restored["messages"][1]["evidence"].get("wave_url", "").endswith("wave.png"))
+    check("对话: 恢复不存在的对话返回 None",
+          pipeline.restore_conversation("no-such-conv") is None)
+    cl = pipeline.conversation_list()
+    check("对话: 清单带标题与条数", len(cl) == 1 and cl[0]["title"].startswith("先做")
+          and cl[0]["messages"] == 4, str(cl))
 
     # ---- 4b. 验收环：指标不达标 → 差距回喂 → 调参重跑 ----
     calls = {"n": 0}
@@ -195,14 +206,14 @@ def main() -> int:
     check("验收环: Evidence 带验收明细", len(ev.checks) == 1 and ev.checks[0]["ok"])
 
     # ---- 4c. 附件网表：跳过生成直接进仿真（诊断场景） ----
-    pipeline._SESSIONS.clear()
+    pipeline._CONVERSATIONS.clear()
     pipeline.default_workspace().state_path.unlink(missing_ok=True)
     with patch.object(llm, "chat", Scripted(["附件电路解读：实测-3dB约1kHz。"])) as sc_att:
-        d_att = pipeline.chat_with_session("att-1", "帮我仿真验证这个电路", attachment={
+        d_att = pipeline.chat_with_conversation("att-1", "帮我仿真验证这个电路", attachment={
             "filename": "my.cir", "content": GOOD.replace("```spice\n", "").replace("\n```", "")})
     check("附件: 网表直接仿真通过", d_att["ok"] is True, str(d_att.get("retry_log")))
     check("附件: 零次生成调用（跳过 LLM 生成）", len(sc_att.calls) == 1, f"{len(sc_att.calls)} 次")
-    check("附件: 网表进入会话状态", sess("att-1")["netlist"] is not None)
+    check("附件: 网表进入对话上下文", conv("att-1")["netlist"] is not None)
     check("附件: 文本附件并入需求",
           pipeline._looks_like_netlist("note.txt", "设计一个放大器") is False
           and pipeline._looks_like_netlist("a.cir", "任意") is True
@@ -288,11 +299,23 @@ write out.raw v(out)
         check("GET /compare.html 返回对照页", r.status_code == 200 and "同题对照" in r.text)
 
     with patch.object(llm, "chat", Scripted([GOOD, "接口解读。"])) as sc2, TestClient(app) as client:
-        r = client.post("/chat", json={"session_id": "api-test", "message": "1kHz低通"})
+        r = client.post("/chat", json={"conversation_id": "api-test", "message": "1kHz低通"})
         d = r.json()
         check("POST /chat 200", r.status_code == 200, str(d)[:200])
         check("POST /chat 证据完整", d.get("ok") is True and d.get("waveform_b64")
-              and d.get("session_id") == "api-test", str(d.keys()))
+              and d.get("conversation_id") == "api-test", str(d.keys()))
+        r = client.get("/api/convs")
+        cl = r.json().get("conversations", [])
+        check("GET /api/convs 对话清单", r.status_code == 200
+              and any(c["id"] == "api-test" for c in cl), str(cl)[:150])
+        r = client.get("/api/convs/api-test")
+        dt = r.json()
+        check("GET /api/convs/{id} 恢复消息流", r.status_code == 200
+              and len(dt.get("messages", [])) == 2
+              and dt["messages"][0]["role"] == "user"
+              and dt["messages"][1]["evidence"]["ok"] is True, str(dt)[:150])
+        r = client.get("/api/convs/none-such")
+        check("GET /api/convs/{不存在} 404", r.status_code == 404)
 
     with patch.object(llm, "chat", lambda *a, **k: "裸模型回答：用1.6k电阻和100nF电容。"), \
             TestClient(app) as client:

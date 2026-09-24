@@ -336,32 +336,109 @@ def _skidl_track(request: str, ev: "Evidence") -> str | None:
 # 按工作区分键 + 落盘 .cp/state.json（内存 dict 只是热缓存，重启不丢）。
 # ---------------------------------------------------------------------------
 
-_SESSIONS: dict[str, dict[str, dict]] = {}  # 工作区根路径 -> sid -> 会话
+_CONVERSATIONS: dict[str, dict[str, dict]] = {}  # 工作区根路径 -> cid -> 对话
 
 
-def get_session(session_id: str | None = None,
-                workspace: Workspace | None = None) -> dict:
+def _now() -> str:
+    return time.strftime("%Y-%m-%d %H:%M")
+
+
+def get_conversation(conversation_id: str | None = None,
+                     workspace: Workspace | None = None) -> dict:
+    """取（或新建）对话记录：消息流 + 最后验证通过的网表（多轮电路上下文）。"""
     ws = workspace or default_workspace()
-    sid = session_id or uuid.uuid4().hex[:12]
-    store = _SESSIONS.setdefault(str(ws.root), ws.load_sessions())
-    if sid not in store:
-        store[sid] = {"id": sid, "netlist": None, "history": []}
-    return store[sid]
+    store = _CONVERSATIONS.setdefault(str(ws.root), ws.load_conversations())
+    cid = conversation_id or uuid.uuid4().hex[:12]
+    if cid not in store:
+        store[cid] = {"id": cid, "title": "", "created": _now(),
+                      "updated": _now(), "netlist": None, "messages": []}
+    return store[cid]
 
 
-def _save_sessions(workspace: Workspace) -> None:
-    store = _SESSIONS.get(str(workspace.root))
+def _save_conversations(workspace: Workspace) -> None:
+    store = _CONVERSATIONS.get(str(workspace.root))
     if store is not None:
-        workspace.save_sessions(store)
+        workspace.save_conversations(store)
 
 
-def chat_with_session(session_id: str, message: str,
-                      attachment: dict | None = None,
-                      workspace: Workspace | None = None) -> dict:
-    """attachment: {filename, content}——网表文件直接作为初始电路，文本文件
-    内容并入需求。"""
+def conversation_list(workspace: Workspace | None = None) -> list[dict]:
+    """对话清单（新的在前，只带摘要不带消息流）。"""
     ws = workspace or default_workspace()
-    s = get_session(session_id, workspace=ws)
+    store = _CONVERSATIONS.setdefault(str(ws.root), ws.load_conversations())
+    items = [{"id": c["id"], "title": c.get("title") or "（无标题）",
+              "updated": c.get("updated", ""),
+              "messages": len(c.get("messages", []))}
+             for c in store.values()]
+    items.sort(key=lambda x: x["updated"], reverse=True)
+    return items
+
+
+def _assistant_entry(ev: "Evidence") -> dict:
+    """消息流里的助手条目：正常结果引用任务档案（task_id，恢复时从
+    evidence.json + 图片文件重建）；无档案的轻量结果（如领域守卫拒绝）
+    内联携带证据，恢复对话时同样完整还原。"""
+    if ev.task_id:
+        return {"role": "assistant", "task_id": ev.task_id, "ok": ev.ok,
+                "rejected": ev.rejected, "ts": _now()}
+    return {"role": "assistant",
+            "inline": {"ok": ev.ok, "rejected": ev.rejected,
+                       "request": ev.request,
+                       "interpretation": ev.interpretation,
+                       "retry_log": ev.retry_log},
+            "ts": _now()}
+
+
+def _load_archived_evidence(ws: Workspace, task_id: str) -> dict | None:
+    """从工作区任务档案重建证据（图片转 /api/files URL，不回传 base64）。"""
+    try:
+        f = ws.resolve(Path("docs") / task_id / "evidence.json")
+        d = json.loads(f.read_text(encoding="utf-8"))
+    except (PermissionError, OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(d, dict):
+        return None
+    for key, name in (("wave_url", "wave.png"), ("sch_url", "schematic.png")):
+        try:
+            if (f.parent / name).is_file():
+                d[key] = f"/api/files/{task_id}/{name}"
+        except OSError:
+            pass
+    return d
+
+
+def restore_conversation(conversation_id: str,
+                         workspace: Workspace | None = None) -> dict | None:
+    """恢复对话：消息流完整还原——用户消息原文 + 助手证据卡（档案重建）。"""
+    ws = workspace or default_workspace()
+    store = _CONVERSATIONS.setdefault(str(ws.root), ws.load_conversations())
+    c = store.get(conversation_id)
+    if c is None:
+        return None
+    messages = []
+    for m in c.get("messages", []):
+        if m.get("role") != "assistant":
+            messages.append({"role": "user", "text": m.get("text", ""),
+                             "attachment": m.get("attachment"), "ts": m.get("ts")})
+            continue
+        ev = m.get("inline")
+        if not ev and m.get("task_id"):
+            ev = _load_archived_evidence(ws, m["task_id"])
+        if ev is None:
+            ev = {"ok": m.get("ok", False), "rejected": m.get("rejected", False),
+                  "interpretation": "（该次结果的档案已清理）"}
+        messages.append({"role": "assistant", "evidence": ev, "ts": m.get("ts")})
+    return {"id": c["id"], "title": c.get("title") or "（无标题）",
+            "created": c.get("created"), "updated": c.get("updated"),
+            "messages": messages}
+
+
+def chat_with_conversation(conversation_id: str | None, message: str,
+                           attachment: dict | None = None,
+                           workspace: Workspace | None = None) -> dict:
+    """attachment: {filename, content}——网表文件直接作为初始电路，文本文件
+    内容并入需求。返回证据包 + conversation_id。"""
+    ws = workspace or default_workspace()
+    c = get_conversation(conversation_id, workspace=ws)
     message = message[:8000]  # 正文限长（防内存滥用）
     initial_netlist = None
     if attachment and attachment.get("content"):
@@ -371,15 +448,19 @@ def chat_with_session(session_id: str, message: str,
             initial_netlist = attachment["content"]
         else:
             message = f"{message}\n\n[附件 {attachment.get('filename', '')} 的内容]\n{attachment['content'][:4000]}"
-    ev = run_pipeline(message, previous_netlist=initial_netlist or s["netlist"],
+    ev = run_pipeline(message, previous_netlist=initial_netlist or c["netlist"],
                       initial_netlist=initial_netlist, workspace=ws)
     if ev.ok:
-        s["netlist"] = ev.netlist  # 只有验证通过的电路才进入会话状态
-    s["history"].append({"user": message, "ok": ev.ok,
-                         "attachment": attachment and attachment.get("filename")})
-    _save_sessions(ws)
+        c["netlist"] = ev.netlist  # 只有验证通过的电路才进入对话上下文
+    c["messages"].append({"role": "user", "text": message, "ts": _now(),
+                          "attachment": attachment and attachment.get("filename")})
+    c["messages"].append(_assistant_entry(ev))
+    if not c.get("title"):
+        c["title"] = message.strip().replace("\n", " ")[:36]
+    c["updated"] = _now()
+    _save_conversations(ws)
     d = ev.to_dict()
-    d["session_id"] = s["id"]  # 空入参时客户端也能拿到新建的会话 id
+    d["conversation_id"] = c["id"]  # 空入参时客户端也能拿到新建的对话 id
     return d
 
 

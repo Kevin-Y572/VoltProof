@@ -126,24 +126,40 @@ class Workspace:
         return out
 
     # ------------------------------------------------------------------
-    # 会话状态（持久化）
+    # 会话状态（持久化；state.json 里 sessions 与 conversations 共存，
+    # 写任一键都先读后合并，绝不清掉对方）
     # ------------------------------------------------------------------
 
-    def load_sessions(self) -> dict[str, dict]:
+    def _read_state(self) -> dict:
         try:
             data = json.loads(self.state_path.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and isinstance(data.get("sessions"), dict):
-                return data["sessions"]
+            if isinstance(data, dict):
+                return data
         except (OSError, json.JSONDecodeError):
             pass
         return {}
 
-    def save_sessions(self, sessions: dict[str, dict]) -> None:
+    def _write_state(self, key: str, value) -> None:
+        data = self._read_state()
+        data[key] = value
         self.cp_dir.mkdir(parents=True, exist_ok=True)
         tmp = self.state_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"sessions": sessions}, ensure_ascii=False),
-                       encoding="utf-8")
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         tmp.replace(self.state_path)  # 原子替换，防写一半坏档
+
+    def load_sessions(self) -> dict[str, dict]:
+        sessions = self._read_state().get("sessions")
+        return sessions if isinstance(sessions, dict) else {}
+
+    def save_sessions(self, sessions: dict[str, dict]) -> None:
+        self._write_state("sessions", sessions)
+
+    def load_conversations(self) -> dict[str, dict]:
+        convs = self._read_state().get("conversations")
+        return convs if isinstance(convs, dict) else {}
+
+    def save_conversations(self, conversations: dict[str, dict]) -> None:
+        self._write_state("conversations", conversations)
 
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent

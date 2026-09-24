@@ -53,7 +53,7 @@ _active_ws = _init_workspace()
 
 
 class ChatReq(BaseModel):
-    session_id: str | None = None
+    conversation_id: str | None = None
     message: str
     attachment: dict | None = None  # {filename, content}：网表或文本文件
 
@@ -74,14 +74,11 @@ class LlmConfigReq(BaseModel):
 
 @app.post("/chat")
 def chat(req: ChatReq):
-    """产品管线：生成 → 检查 → 仿真 → 重试 → 证据。"""
+    """产品管线：生成 → 检查 → 仿真 → 重试 → 证据。对话可跨请求续接。"""
     ws = _active_ws  # 入口捕获：切换工作区不影响进行中的请求
-    sid = req.session_id or ""
     try:
-        data = pipeline.chat_with_session(sid, req.message,
-                                          attachment=req.attachment, workspace=ws)
-        data["session_id"] = sid or data.get("session_id")
-        return data
+        return pipeline.chat_with_conversation(req.conversation_id, req.message,
+                                               attachment=req.attachment, workspace=ws)
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
@@ -134,6 +131,21 @@ def ws_open(req: WsOpenReq):
 @app.get("/api/ws/tasks")
 def ws_tasks():
     return {"root": str(_active_ws.root), "tasks": _active_ws.list_tasks()}
+
+
+@app.get("/api/convs")
+def convs_list():
+    """对话清单（新在前，摘要信息）。"""
+    return {"conversations": pipeline.conversation_list(_active_ws)}
+
+
+@app.get("/api/convs/{cid}")
+def conv_detail(cid: str):
+    """恢复对话：完整消息流，证据卡从任务档案重建（图片走 /api/files）。"""
+    conv = pipeline.restore_conversation(cid, workspace=_active_ws)
+    if conv is None:
+        return JSONResponse(status_code=404, content={"error": "对话不存在"})
+    return conv
 
 
 @app.get("/api/files/{task_id}/{name}")
