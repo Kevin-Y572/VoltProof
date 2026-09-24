@@ -85,8 +85,7 @@
     <input id="llmKey" type="password" autocomplete="off" style="width:100%;background:#10131b;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;outline:none" placeholder="sk-…">
     <label style="color:var(--dim);font-size:12px;display:block;margin:8px 0 4px">模型</label>
     <div style="display:flex;gap:8px">
-      <input id="llmModel" list="llmModelList" style="flex:1;background:#10131b;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;outline:none" placeholder="deepseek-flash（可点右侧按钮拉取列表）">
-      <datalist id="llmModelList"></datalist>
+      <input id="llmModel" style="flex:1;background:#10131b;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;outline:none" placeholder="deepseek-flash（可点右侧按钮拉取列表）">
       <button id="llmFetchModels" style="background:var(--card);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:0 12px;font-size:12.5px;cursor:pointer;white-space:nowrap">获取列表</button>
     </div>
     <div id="llmMsg" style="color:var(--warn);font-size:12px;margin-top:8px;min-height:16px"></div>
@@ -124,7 +123,7 @@ const wsInfo = document.getElementById('wsInfo'), wsDialog = document.getElement
 const llmBtn = document.getElementById('llmBtn'), llmDialog = document.getElementById('llmDialog'),
       llmUrl = document.getElementById('llmUrl'), llmKey = document.getElementById('llmKey'),
       llmKeyState = document.getElementById('llmKeyState'), llmModel = document.getElementById('llmModel'),
-      llmModelList = document.getElementById('llmModelList'), llmFetchModels = document.getElementById('llmFetchModels'),
+      llmFetchModels = document.getElementById('llmFetchModels'),
       llmMsg = document.getElementById('llmMsg');
 
 function fill(text) { input.value = text; input.focus(); }
@@ -321,10 +320,8 @@ llmFetchModels.addEventListener('click', async () => {
     const r = await fetch('/api/llm/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || '拉取失败');
-    llmModelList.innerHTML = d.models.map(m => `<option value="${escapeHtml(m)}"></option>`).join('');
     llmMsg.style.color = 'var(--ok)';
-    // datalist 下拉会按输入框当前值过滤（已选模型时只见一个），模型名
-    // 同时渲染成可点选徽章，点谁选谁
+    // 模型名渲染成可点选徽章，点谁选谁（不做 datalist——它会按输入框当前值过滤）
     llmMsg.innerHTML = `获取到 ${d.models.length} 个模型，点选：` +
       d.models.map(m => `<span class="mchip" onclick="pickModel('${escapeHtml(m)}')">${escapeHtml(m)}</span>`).join('');
   } catch (e) {
