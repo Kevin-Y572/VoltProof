@@ -147,6 +147,16 @@ FAILS: list[str] = []
 
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="cp_bv_"))
+    # 环境预检：ngspice 不可用时判分器拿不到波形，失败现场不可读——
+    # 干净退出并给修复指引（与 test_offline 同一约定，返回码 2）
+    probe = run_netlist(
+        "* probe\nV1 a 0 1\nR1 a 0 1k\n.control\nop\nwrite out.raw v(a)\n.endc\n.end\n",
+        workdir=tmp / "probe")
+    if not probe.ok:
+        print("[环境不可用] 无法运行 ngspice："
+              f"{(probe.stderr or probe.error_snippet)[:200]}\n"
+              "请安装 ngspice 后设 VOLTPROOF_NGSPICE 指向 ngspice.exe，或将其加入 PATH。")
+        return 2
     for tid, nl in NL.items():
         if tid == "square-osc":
             continue  # 该网表"应判失败"，在下方专段验证

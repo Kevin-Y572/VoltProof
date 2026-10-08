@@ -85,6 +85,22 @@ class Scripted:
 
 
 def main() -> int:
+    # 环境预检：缺 ngspice 时每轮仿真都失败，修复环烧光 Scripted 响应后
+    # IndexError 崩溃——不如开局给修复指引（与 test_offline 同一约定，返回码 2）
+    import tempfile as _tf
+    from app.ngspice_runner import run_netlist
+    _pd = _tf.mkdtemp(prefix="cp_probe_")
+    _probe = run_netlist(
+        "* probe\nV1 a 0 1\nR1 a 0 1k\n.control\nop\nwrite out.raw v(a)\n.endc\n.end\n",
+        workdir=_pd)
+    import shutil as _sh0
+    _sh0.rmtree(_pd, ignore_errors=True)
+    if not _probe.ok:
+        print("[环境不可用] 无法运行 ngspice："
+              f"{(_probe.stderr or _probe.error_snippet)[:200]}\n"
+              "请安装 ngspice 后设 VOLTPROOF_NGSPICE 指向 ngspice.exe，或将其加入 PATH。")
+        return 2
+
     # 清结果缓存：多个用例共用同一请求文本，不能互相吃到缓存
     # （缓存现在按工作区落在 out/.cp/cache）
     import shutil as _sh
@@ -113,6 +129,9 @@ def main() -> int:
     check("领域守卫: 正常电路需求不误伤",
           pipeline._domain_guard("设计桥式整流+电容滤波电路，纹波<1V") is None
           and pipeline._domain_guard("用 FPGA 产生 1kHz 时钟") is not None)
+    check("领域守卫: 模拟语境的 testbench 不误伤",
+          pipeline._domain_guard("给这个放大器搭一个 testbench，仿真验证增益") is None
+          and pipeline._domain_guard("帮我写 Verilog testbench") is not None)
 
     # ---- 1. 一次通过 ----
     with patch.object(llm, "chat", Scripted([GOOD, "解读：实测-3dB约1kHz。"])):

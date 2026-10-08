@@ -111,6 +111,17 @@ def check(name: str, cond: bool, detail: str = "") -> None:
 
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="cp_test_"))
+    # 环境预检：ngspice 不可用时干净退出并给修复指引。不预检的话，
+    # 中途 raw_path=None 会让后续断言连环 TypeError，失败现场不可读
+    probe = run_netlist(
+        "* probe\nV1 a 0 1\nR1 a 0 1k\n.control\nop\nwrite out.raw v(a)\n.endc\n.end\n",
+        workdir=tmp / "probe")
+    if not probe.ok:
+        shutil.rmtree(tmp, ignore_errors=True)
+        print("[环境不可用] 无法运行 ngspice："
+              f"{(probe.stderr or probe.error_snippet)[:200]}\n"
+              "请安装 ngspice 后设 VOLTPROOF_NGSPICE 指向 ngspice.exe，或将其加入 PATH。")
+        return 2
     try:
         # ---- 1. 好网表：仿真 ok + raw 落盘 ----
         sim = run_netlist(RC_NETLIST, workdir=tmp / "good")
@@ -397,9 +408,6 @@ def main() -> int:
         finally:
             llm._client = old_client
 
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-
         # ---- 6. SKiDL 双轨构建器 ----
         from app.skidl_builder import build_netlist as skidl_build
 
@@ -501,6 +509,15 @@ print("OUT_NODES: v(OUT)")
         check("安全: .control edit 被拒绝",
               any("外部程序" in p
                   for p in check_netlist_safety("* e\nV1 a 0 1\n.control\nedit\n.endc\n.end")))
+        # shell 逃逸（实测 PoC）：aspice 起子 shell 执行任意命令（曾真实写出
+        # 文件）；"!" 前缀是交互 shell 逃逸（batch 恰不执行，但不能赌版本行为）
+        aspice_nl = ("* evil\nV1 a 0 1\nR1 a 0 1k\n.control\n"
+                     "aspice echo PWNED > C:/pwned.txt\nop\n.endc\n.end")
+        check("安全: .control aspice 被拒绝",
+              any("系统命令" in p for p in check_netlist_safety(aspice_nl)))
+        check("安全: .control ! 前缀 shell 逃逸被拒绝",
+              any("系统命令" in p
+                  for p in check_netlist_safety("* e\nV1 a 0 1\n.control\n!del C:/x\n.endc\n.end")))
         check("安全: 正常网表零误报", check_netlist_safety(RC_NETLIST) == [])
 
         ESCAPE = ('cw = [c for c in (1).__class__.__base__.__subclasses__() '
@@ -555,28 +572,36 @@ print("OUT_NODES: v(OUT)")
               and "max(-14.5, min(100000*v(a,0), 14.5))" in tuned_cl,
               (note_cl, tuned_cl))
         # 端到端：对称不振 → .ic 起振 → 幅度上天 → min/max 钳位 → ~1kHz 方波
+        # （链式依赖三段仿真，任一段失败只判该段 FAIL，不许带崩后续断言）
+        from app.measure import dominant_freq
         sim_o1 = run_netlist(OSC_NL, workdir=tmp / "osc")
         check("osc: 原网表仿真通过（静态亚稳）", sim_o1.ok)
-        from app.measure import dominant_freq
-        tr_o1 = measure.load_traces(sim_o1.raw_path)
-        vo1 = next(v for k, v in tr_o1.signals.items() if "out" in k.lower())
-        check("osc: 对称网表判非周期（未起振）", dominant_freq(tr_o1.time, vo1) is None)
-        sim_o2 = run_netlist(tuned_up, workdir=tmp / "osc")
-        tr_o2 = measure.load_traces(sim_o2.raw_path)
-        vo2 = next(v for k, v in tr_o2.signals.items() if "out" in k.lower())
-        dom2 = dominant_freq(tr_o2.time, vo2)
-        check("osc: .ic 后起振", dom2 is not None)
-        check("osc: 无钳位时幅度上天（>1e6V，触发 clamp 的场景）",
-              float(np.ptp(vo2)) > 1e6, f"vpp={float(np.ptp(vo2)):.3g}")
-        tuned_cl2, _ = numeric_tune(tuned_up, [{"kind": "clamp", "message": ""}])
-        sim_o3 = run_netlist(tuned_cl2, workdir=tmp / "osc")
-        tr_o3 = measure.load_traces(sim_o3.raw_path)
-        vo3 = next(v for k, v in tr_o3.signals.items() if "out" in k.lower())
-        dom3 = dominant_freq(tr_o3.time, vo3)
-        check("osc: 钳位后 vpp≈23V（±11.5 轨）", abs(float(np.ptp(vo3)) - 23.0) < 0.5,
-              f"vpp={float(np.ptp(vo3)):.3g}")
-        check("osc: 钳位后频率≈1kHz", dom3 is not None and abs(dom3[0] - 1000) < 60,
-              f"f={None if dom3 is None else dom3[0]:.0f}")
+        if sim_o1.raw_path:
+            tr_o1 = measure.load_traces(sim_o1.raw_path)
+            vo1 = next(v for k, v in tr_o1.signals.items() if "out" in k.lower())
+            check("osc: 对称网表判非周期（未起振）", dominant_freq(tr_o1.time, vo1) is None)
+        if tuned_up:
+            sim_o2 = run_netlist(tuned_up, workdir=tmp / "osc")
+            if sim_o2.raw_path:
+                tr_o2 = measure.load_traces(sim_o2.raw_path)
+                vo2 = next(v for k, v in tr_o2.signals.items() if "out" in k.lower())
+                dom2 = dominant_freq(tr_o2.time, vo2)
+                check("osc: .ic 后起振", dom2 is not None)
+                check("osc: 无钳位时幅度上天（>1e6V，触发 clamp 的场景）",
+                      float(np.ptp(vo2)) > 1e6, f"vpp={float(np.ptp(vo2)):.3g}")
+                tuned_cl2, _ = numeric_tune(tuned_up, [{"kind": "clamp", "message": ""}])
+                if tuned_cl2:
+                    sim_o3 = run_netlist(tuned_cl2, workdir=tmp / "osc")
+                    if sim_o3.raw_path:
+                        tr_o3 = measure.load_traces(sim_o3.raw_path)
+                        vo3 = next(v for k, v in tr_o3.signals.items() if "out" in k.lower())
+                        dom3 = dominant_freq(tr_o3.time, vo3)
+                        check("osc: 钳位后 vpp≈23V（±11.5 轨）",
+                              abs(float(np.ptp(vo3)) - 23.0) < 0.5,
+                              f"vpp={float(np.ptp(vo3)):.3g}")
+                        check("osc: 钳位后频率≈1kHz",
+                              dom3 is not None and abs(dom3[0] - 1000) < 60,
+                              f"f={None if dom3 is None else dom3[0]:.0f}")
 
         # ---- 12. 兼容层：多 plot raw + CIDER 静态拦截 + 超时报错透出 ----
         from app.measure import _fallback_parse, split_plot_sections
@@ -746,6 +771,8 @@ print("OUT_NODES: v(OUT)")
             _setf.unlink(missing_ok=True)
 
         print(f"\n{'='*40}\n{'全部通过' if not FAILURES else '失败: ' + ', '.join(FAILURES)}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
     return 1 if FAILURES else 0
 
 
