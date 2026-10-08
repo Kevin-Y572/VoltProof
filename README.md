@@ -24,7 +24,7 @@
 
 ```bash
 # 0. 环境：Python 3.10+；ngspice（SourceForge 下载解压即可）
-setx VOLTPROOF_NGSPICE "C:\path\to\ngspice-47\Spice64\bin\ngspice.exe"   # Windows；已进 PATH 可跳过
+setx VOLTPROOF_NGSPICE "C:\path\to\ngspice-47\Spice64\bin\ngspice.exe"   # Windows；已进 PATH 可跳过（setx 只对新开的终端生效）
 
 # 1. 安装依赖
 pip install -r requirements.txt

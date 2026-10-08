@@ -446,6 +446,3 @@ def extract_code_block(text: str) -> str:
     # 取最长的代码段作为网表
     candidates = [p.split("\n", 1)[-1] for p in parts[1:-1] if p.strip()]
     return max(candidates, key=len).strip() if candidates else text.strip()
-
-
-# TODO(W1+): 相同请求的结果缓存（演示前预跑省钱省时）——key 取 (model, system, user) 哈希
