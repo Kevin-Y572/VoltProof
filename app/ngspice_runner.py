@@ -25,9 +25,12 @@ _TIMEOUT = int(os.environ.get("VOLTPROOF_SIM_TIMEOUT", "30"))
 
 # 安全过滤：ngspice .control 块支持 shell 等系统命令，
 # 用户/LLM 网表可借此执行任意系统命令（实测 PoC 成功）——一律拒绝。
+# aspice 与 "!" 前缀同样起 shell（aspice 已实测绕过并写出文件；ngspice-47
+# batch 模式恰好不执行 "!"，但不能靠版本行为兜底，一并拒绝）。
 # quit 只退出 ngspice 无副作用，放行（否则误伤正常网表习惯）。
-_CTRL_DANGER = re.compile(r"^\s*(shell|system|alias|spice|exec|source|cd)\b",
-                          re.IGNORECASE)
+_CTRL_DANGER = re.compile(
+    r"^\s*(?:!|\b(?:shell|system|alias|spice|exec|source|cd|aspice)\b)",
+    re.IGNORECASE)
 # .control 内启动外部程序的命令：gnuplot 拉起 wgnuplot 绘图前端、edit 拉起
 # 外部编辑器——不执行任意命令但会在服务器桌面弹 GUI 窗口（ngspice 官方
 # 示例 plot/combplot.cir 回归实测：未装 gnuplot 时弹"找不到文件 wgnuplot"）
