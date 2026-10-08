@@ -79,9 +79,11 @@ def _b64_png(png: Path) -> str:
 
 # 领域守卫：数字逻辑（Verilog/RTL）类需求不在能力范围——本工具做的是
 # 模拟电路 + SPICE 仿真。前置拒绝（零 LLM/仿真消耗），而不是让修复环
-# 烧完重试预算后给一张莫名的失败卡
+# 烧完重试预算后给一张莫名的失败卡。
+# 注意不收录裸词 testbench：SPICE 圈也说 testbench（"给放大器搭个 testbench
+# 仿真"是合法模拟需求），裸词会误伤；数字语义由 verilog/fpga/rtl 等词承载
 _RTL_GUARD_RE = re.compile(
-    r"verilog|systemverilog|vhdl|\bfpga\b|\brtl\b|可综合|always\s*@|testbench",
+    r"verilog|systemverilog|vhdl|\bfpga\b|\brtl\b|可综合|always\s*@",
     re.IGNORECASE)
 
 _GUARD_INTERP = (
