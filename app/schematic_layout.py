@@ -27,8 +27,10 @@ from pathlib import Path
 
 from . import checks as _checks
 
-_DOT = os.environ.get("VOLTPROOF_DOT",
-                      r"C:\Program Files\Graphviz\bin\dot.exe")
+# 跨平台解析：环境变量 > PATH 上的 dot（Linux/macOS/CI）> Windows 默认安装路径。
+# 原来只认 Windows 默认路径，Linux 上即使装了 graphviz 也永远走网格回退
+_DOT = (os.environ.get("VOLTPROOF_DOT") or shutil.which("dot")
+        or r"C:\Program Files\Graphviz\bin\dot.exe")
 
 # 元件引脚数（用于布局/渲染分类；不在表内的按 2 端处理）
 _PINS = {"Q": 3, "M": 4, "E": 4, "G": 4, "X": 99, "K": 99, "F": 2, "H": 2, "B": 2}
