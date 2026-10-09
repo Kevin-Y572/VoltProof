@@ -249,8 +249,13 @@ def main() -> int:
         # ---- 5b. LLM 封装层（DeepSeek 官方文档行为，stub 客户端，零网络） ----
         from types import SimpleNamespace as NS
 
-        import httpx
         import openai as openai_mod
+        try:
+            import httpx
+        except ModuleNotFoundError:
+            # openai 3.x 起传递依赖改为 httpx 的 fork（httpx2）——测试替身
+            # 必须与 openai 实际使用的 HTTP 客户端同源，Response/Request 才对得上
+            import httpx2 as httpx
 
         def _mk_client(captured, resp=None, err=None):
             def create(**kw):
@@ -697,9 +702,9 @@ print("OUT_NODES: v(OUT)")
         ws.save_sessions({"s1": {"id": "s1", "netlist": "N", "history": []}})
         check("工作区: 会话状态落盘可往返",
               Workspace(wsroot).load_sessions().get("s1", {}).get("netlist") == "N")
-        check("工作区: 缺省工作区指向仓库 out/",
-              str(default_workspace().root).endswith("out")
-              and str(default_workspace().root.parent).endswith("voltproof"))
+        check("工作区: 缺省工作区指向应用根 out/",
+              str(default_workspace().root)
+              == str(Path(__file__).resolve().parent.parent / "out"))
 
         # ---- LLM 供应商配置（前端可配 + SSRF 校验 + 多供应商方言）----
         def _llm_reject(url: str) -> str:
