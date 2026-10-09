@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -18,7 +19,23 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-_NGSPICE = os.environ.get("VOLTPROOF_NGSPICE", "ngspice")
+
+def _resolve_ngspice() -> str:
+    """ngspice 可执行文件定位：环境变量 > PATH > 便携包自带（<包根>/ngspice/bin）。
+    便携发行版里 ngspice 随包分发且不进系统 PATH，第三级让免安装包零配置可用。"""
+    env = os.environ.get("VOLTPROOF_NGSPICE")
+    if env:
+        return env
+    on_path = shutil.which("ngspice")
+    if on_path:
+        return on_path
+    bundled = Path(__file__).resolve().parent.parent / "ngspice" / "bin" / "ngspice.exe"
+    if bundled.is_file():
+        return str(bundled)
+    return "ngspice"
+
+
+_NGSPICE = _resolve_ngspice()
 # 超时可覆盖；默认 30s：正常的 tran 远快于此，收敛死循环 30s 也救不回来，
 # 卡满 60s 只是烧掉重试预算（曾有电路拖满 4×60s）
 _TIMEOUT = int(os.environ.get("VOLTPROOF_SIM_TIMEOUT", "30"))

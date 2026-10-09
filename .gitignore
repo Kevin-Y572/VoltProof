@@ -30,3 +30,6 @@ bench/external/
 skidl_REPL.*
 bench/report*.md
 bench/regress_report.md
+
+# 便携版构建产物
+dist/
