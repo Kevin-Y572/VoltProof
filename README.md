@@ -12,12 +12,15 @@
 ## 特性
 
 - **仿真在环**：AI 的每份回答都要先过 ngspice 仿真——不只判断"能仿真"，还实测纹波、截止频率、增益、主频等指标并与目标比对
-- **自动修复循环**：静态检查或仿真失败时，报错与偏差被喂回 LLM 迭代修正，而不是把错误留给用户
-- **证据可查**：波形图、指标数值、原理图、完整网表随回答给出，每个结论可复核
+- **自动修复循环**：静态检查或仿真失败时，报错与偏差被喂回 LLM 迭代修正，而不是把错误留给用户；修复过程经 `/chat/stream` 实时推送（前端逐轮可见"AI 被仿真器打回"）
+- **证据可查**：波形图（AC 自动对数频率轴）、指标数值、原理图、完整网表随回答给出，每个结论可复核
+- **what-if 参数扫描**：对已验证电路改一个元件取多个值，逐点真实仿真出曲线族与指标趋势——纯确定性，非 AI 生成
+- **实验报告导出**：一段对话一键导出单文件 HTML 报告（需求/网表/波形/指标表/结论），浏览器打印即 PDF
 - **双轨后端**：LLM 直接写 SPICE 网表（默认），或写 [SKiDL](https://github.com/devbisme/skidl) Python 代码经沙箱构建
 - **确定性原理图**：网表自动布局渲染，拓扑 100% 正确
 - **多工作区**：产物与会话状态按任务归档，切换工作区即切换项目
 - **模型自选**：任意 OpenAI 兼容供应商（DeepSeek / OpenAI / 本地 Ollama 等），页面 ⚙ 一键切换，密钥只存本机、永不回传
+- **MCP Server**：`design_circuit` / `verify_netlist` 两个工具暴露给编程 agent（Claude Desktop / Cursor 等，见下文"作为 MCP 工具接入"）
 - **同题对照**：`/compare.html` 并排演示同一个问题"直接问 AI"与"仿真验证后"的两种回答
 
 ## 快速开始
@@ -34,24 +37,47 @@ pip install -r requirements.txt
 setx VOLTPROOF_API_KEY 你的key
 #    b) 启动后在页面右上角 ⚙ 模型 里填写（保存到本机 settings.json）
 
-# 3. 离线自检（不需要 API Key，验证仿真链路/检查器/沙箱/接口契约）
+# 3. 离线自检（不需要 API Key，验证仿真链路/检查器/沙箱/接口契约/MCP 协议）
 python tests/test_offline.py
 python tests/test_pipeline_mock.py
+python tests/test_bench_validators.py
+python tests/test_mcp.py
 
 # 4. 启动
 uvicorn app.main:app --reload
 # 浏览器打开 http://127.0.0.1:8000（对话页）
 # 同题对照演示：http://127.0.0.1:8000/compare.html
+# 也可 pip install . 后直接运行 voltproof 命令（自动挑端口并开浏览器）
 ```
 
 ## 使用指南
 
-- **对话**：直接用自然语言描述需求，例如"设计桥式整流+电容滤波电路，220V/50Hz 降压到 12V，纹波 <1V"。可附上网表或文本文件让 VoltProof 分析/改进。
+- **对话**：直接用自然语言描述需求，例如"设计桥式整流+电容滤波电路，220V/50Hz 降压到 12V，纹波 <1V"。可附上网表或文本文件让 VoltProof 分析/改进。等待期间修复环逐轮实时可见。
 - **证据卡片**：每份回答附判定（达标/未达标）、实测指标、波形图、原理图、AI 解读，以及完整网表——复核或搬到别处仿真都方便。
 - **多轮迭代**：会话内继续提要求（"把纹波再压一半"），VoltProof 会携带上一轮验证过的网表继续改。
+- **what-if 扫描**：对话区下方 🔀 按钮——选当前电路的一个元件（R/C/L/直流源）、给一组取值，VoltProof 逐值真实仿真，给出曲线族与指标表（增益/峰峰值/主频/-3dB 随参数的变化趋势）。
+- **实验报告**：右上角"对话"历史面板里，每个会话有"📄 报告"入口——导出单文件 HTML（图片内嵌），浏览器打开后 Ctrl+P 即 PDF。
 - **工作区**：顶栏可切换/查看当前工作区，"历史"面板列出全部历史任务与产物，拷走工作区目录即完整归档。
 - **模型配置**：⚙ 弹层里可填供应商 Base URL / API Key / 模型名（可拉取供应商模型列表下拉选择）。本机 Ollama / LM Studio 需机主设置 `VOLTPROOF_ALLOW_PRIVATE_LLM=1` 豁免内网校验。
 - **命令行**：`python -m app.pipeline "设计一个截止频率1kHz的RC低通滤波器"` 直接跑完整管道。
+
+## 作为 MCP 工具接入（Claude Desktop / Cursor 等）
+
+VoltProof 自带 stdio MCP Server，把仿真在环管线暴露为两个工具：`design_circuit`（自然语言设计并验证）与 `verify_netlist`（验证/修复外部网表）。客户端配置：
+
+```json
+{
+  "mcpServers": {
+    "voltproof": {
+      "command": "python",
+      "args": ["-m", "app.mcp_server"],
+      "cwd": "<VoltProof 仓库或便携包根目录>"
+    }
+  }
+}
+```
+
+pip 安装用户可用 `"command": "voltproof-mcp"`。API Key 仍走环境变量 / settings.json，与网页版共用。
 
 ## 环境变量
 
@@ -75,11 +101,12 @@ uvicorn app.main:app --reload
 ## 基准测试
 
 ```bash
-python bench/run_bench.py                 # 10 个典型电路任务（spice 后端）
-python bench/run_bench.py --backend=skidl # SKiDL 后端
+python bench/run_bench.py                     # 18 个典型电路任务（spice 后端）
+python bench/run_bench.py --passes=3          # 每任务独立跑 3 次：pass@1 / pass@3 统计
+python bench/run_bench.py --backend=skidl     # SKiDL 后端
 ```
 
-任务覆盖 RC/LC 滤波、整流滤波、反相/共射放大、张弛振荡、传感器调理等分立元件典型电路，验收为指标级——纹波上限、截止频率、增益、振荡频率等逐项与理论值比对。
+任务覆盖 RC/LC 滤波、高低通、整流滤波、反相/同相/差动/求和放大、共射放大、跟随器、限幅、稳压、张弛振荡、传感器调理等分立元件典型电路，验收为指标级——纹波上限、截止频率、增益、振荡频率等逐项与理论值比对。LLM 输出有非确定性，`--passes` 的 pass@k 才是可比口径。
 
 ## 安全说明
 
