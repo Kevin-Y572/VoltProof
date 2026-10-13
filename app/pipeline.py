@@ -266,6 +266,7 @@ def iter_pipeline_events(request: str, previous_netlist: str | None = None,
                 problems = [f"{c.get('name', '检查项')}未达标：{c.get('detail', '')}" for c in fails]
                 ev.retry_log.append({"round": rnd, "stage": "verify", "problems": problems})
                 if rnd == max_retries:
+                    yield {"type": "stage", "round": rnd, "stage": "verify", "problems": problems}
                     break
                 # 优先程序化数值调参（确定性收敛）：判分层输出的 tune_hint
                 # 直接改源幅度/频率；无可执行项才回退 LLM 全量调参
