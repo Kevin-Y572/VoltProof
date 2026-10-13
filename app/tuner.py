@@ -73,8 +73,9 @@ def numeric_tune(netlist: str, hints: list[dict]) -> tuple[str | None, str]:
         if kind == "startup":
             ins = _tune_startup(lines)
             if ins is not None:
-                idx, ic_line, note = ins
-                lines.insert(idx, ic_line)
+                idx, ic_lines, note = ins
+                for j, ic_line in enumerate(ic_lines):
+                    lines.insert(idx + j, ic_line)
                 notes.append(note)
                 changed = True
             continue  # 起振类没有数值含义，插不进 .ic 就回退 LLM 结构修复
@@ -171,11 +172,13 @@ def _tune_harmonic_resistor(netlist: str, lines: list[str], srcs: list[dict],
     return None
 
 
-def _tune_startup(lines: list[str]) -> tuple[int, str, str] | None:
-    """未起振的确定性修复：给（子电路外的）最大电容设 .ic 初值，打破
-    对称静态点。返回 (插入行号, .ic 行, 说明)；已有 .ic 或找不到电容 → None。
-    即便选中的不是"真正的"定时电容，一个非零初值同样能扰动亚稳态直流解——
-    目标只是打破对称，不是精确预置。"""
+def _tune_startup(lines: list[str]) -> tuple[int, list[str], str] | None:
+    """未起振的确定性修复：给（子电路外的）最大的 1-2 个电容设 .ic 初值，
+    打破对称静态点。返回 (插入行号, .ic 行列表, 说明)；已有 .ic 或找不到
+    电容 → None。
+    插两个而非一个：bench 实测挑"最大电容"会挑中控制脚旁路电容而非定时
+    电容（10n 旁路 > 7.16n 定时），一个非零初值扰动不动静态解；两个都插
+    覆盖定时网络。目标只是打破对称，不是精确预置。"""
     if any(ln.strip().lower().startswith(".ic") for ln in lines):
         return None  # 已有 .ic 仍不起振，结构问题超出数值修复能力
     supply = 5.0  # 找不到 DC 源时的保守默认
@@ -183,7 +186,7 @@ def _tune_startup(lines: list[str]) -> tuple[int, str, str] | None:
         m = re.match(r"^V\w+\s+\S+\s+\S+\s+DC\s+([-+0-9.eE]+[a-zA-Z]*)", ln, re.IGNORECASE)
         if m:
             supply = max(supply, abs(_spice_val(m.group(1))))
-    best = None  # (电容值, 电容名, 节点)
+    caps: list[tuple[float, str, str]] = []  # (电容值, 电容名, 节点)
     in_sub = False
     for ln in lines:
         low = ln.strip().lower()
@@ -196,12 +199,14 @@ def _tune_startup(lines: list[str]) -> tuple[int, str, str] | None:
             if m:
                 val = _spice_val(m.group(4))
                 node = m.group(2) if m.group(2) != "0" else m.group(3)
-                if val > 0 and node != "0" and (best is None or val > best[0]):
-                    best = (val, m.group(1), node)
-    if best is None:
+                if val > 0 and node != "0":
+                    caps.append((val, m.group(1), node))
+    if not caps:
         return None
-    _val, cname, node = best
+    caps.sort(reverse=True)
+    picked = caps[:2]
     v_ic = supply / 3.0
+    ic_lines = [f".ic v({node})={v_ic:g}" for _val, _cname, node in picked]
     # 插在 .control 前（无则 .end 前，再无则文件末尾）
     idx = len(lines)
     for i, ln in enumerate(lines):
@@ -213,9 +218,9 @@ def _tune_startup(lines: list[str]) -> tuple[int, str, str] | None:
             if ln.strip().lower() == ".end":
                 idx = i
                 break
-    ic_line = f".ic v({node})={v_ic:g}"
-    note = f"起振修复：{cname} 所在节点 {node} 设初值 {v_ic:g}V（.ic 打破对称静态点）"
-    return idx, ic_line, note
+    names = "+".join(cname for _v, cname, _n in picked)
+    note = f"起振修复：{names} 所在节点设初值 {v_ic:g}V（.ic 打破对称静态点）"
+    return idx, ic_lines, note
 
 
 def _tune_clamp(lines: list[str]) -> int:

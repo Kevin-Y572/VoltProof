@@ -1,10 +1,11 @@
 """基准跑批：逐任务执行 pipeline，统计首次通过率/重试后通过率/耗时。
 
 用法：
-    python bench/run_bench.py [--quick] [--passes=N] [--backend=skidl]
+    python bench/run_bench.py [--quick] [--passes=N] [--backend=skidl] [--task=ID ...]
     --passes=N  每个任务独立跑 N 次（默认 1），输出 pass@1 与 pass@k 统计
                 （无偏估计 pass@k = 1 - C(n-c,k)/C(n,k)），LLM 非确定性下
                 这才是可比的通过率口径
+    --task=ID   只跑指定任务（可重复），调试单个任务用
 输出：bench/report_{backend}.md + 控制台摘要。通过率是核心质量指标。
 """
 
@@ -44,6 +45,9 @@ def main() -> None:
     tasks = json.loads((BENCH / "tasks.json").read_text(encoding="utf-8"))["tasks"]
     if "--quick" in argv:
         tasks = tasks[:4]
+    only = {a.split("=", 1)[1] for a in argv if a.startswith("--task=")}
+    if only:
+        tasks = [t for t in tasks if t["id"] in only]
     backend = "skidl" if "--backend=skidl" in argv else "spice"
 
     rows = []

@@ -569,6 +569,16 @@ print("OUT_NODES: v(OUT)")
             ctrl_idx = next(i for i, ln in enumerate(tuned_up.splitlines())
                             if ln.strip() == ".control")
             check("tuner: .ic 插在 .control 之前", ic_idx < ctrl_idx)
+        # 双电容场景（bench 实锤）：最大的是控制脚旁路 10n 而非定时 7.16n，
+        # 只插一个会挑错——必须两个节点都插
+        TWO_CAP = ("* 555-ish\nVcc vcc 0 DC 5\nR1 vcc dis 1k\nR2 dis thr 3.6k\n"
+                   "C1 thr 0 7.16n\nC2 ctrl 0 10n\n.end\n")
+        tuned_tc, note_tc = numeric_tune(TWO_CAP, [{"kind": "startup", "message": ""}])
+        ics = [ln for ln in (tuned_tc or "").splitlines() if ln.startswith(".ic")]
+        check("tuner: 双电容插两行 .ic（定时+旁路都覆盖）",
+              tuned_tc is not None and len(ics) == 2
+              and ".ic v(ctrl)=" in tuned_tc and ".ic v(thr)=" in tuned_tc,
+              (note_tc, tuned_tc))
         tuned_up2, _ = numeric_tune(tuned_up or OSC_NL, [{"kind": "startup", "message": ""}])
         check("tuner: 已有 .ic 时不再重复插", tuned_up2 is None)
 

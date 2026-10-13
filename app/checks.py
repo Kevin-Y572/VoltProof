@@ -37,10 +37,16 @@ class CheckResult:
         self.errors.append(msg)
 
 
+_ELEMENT_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.]*$")
+
+
 def iter_element_lines(lines: list[str]):
     """产出 (行号, 内容)，只含元件行：跳过注释、点指令、续行、.control 块
     和 .subckt/.ends 体（子电路内部节点是局部作用域，不参与顶层浮空检查；
-    其内部错误由 ngspice 真实报错兜底）。"""
+    其内部错误由 ngspice 真实报错兜底）。
+    首个 token 不是合法元件名（字母开头的字母数字串）的行也跳过——LLM
+    偶尔输出不带 + 前缀的断行表达式（如 VALUE={min(...)} 换行），把它当
+    元件行会解析出'min(1e5*(v(x)'之类的假节点，垃圾报错淹没真实问题。"""
     in_control = False
     subckt_depth = 0
     for i, raw in enumerate(lines, start=1):
@@ -65,6 +71,8 @@ def iter_element_lines(lines: list[str]):
         if subckt_depth:
             continue
         if s.startswith((".", "+")):
+            continue
+        if not _ELEMENT_NAME_RE.match(s.split()[0]):
             continue
         yield i, s
 
