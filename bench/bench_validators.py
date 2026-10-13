@@ -37,7 +37,8 @@ def _sig(tr: Traces | None, frag: str):
 
 
 def _near(v, target, tol):
-    return abs(v - target) <= tol * target
+    # 目标可能为负（如反相求和的直流分量），容差按绝对值计
+    return abs(v - target) <= tol * abs(target)
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +224,48 @@ VALIDATORS = {
 }
 
 
-def get_validators(task_id: str) -> list:
-    v = VALIDATORS.get(task_id)
-    return [v] if v else []
+# ---------------------------------------------------------------------------
+# 通用 spec 验收器：指标定义直接写在 tasks.json 里（metric/target/tol/信号
+# 片段），扩任务不再需要手写验收函数。指标计算与产品 what-if 扫描共用
+# 同一实现（app.whatif.compute_metric）——判分口径单一来源。
+# 手写验收器优先（square-osc 的 startup/clamp 闭环修复等特殊逻辑不可声明化）。
+# ---------------------------------------------------------------------------
+
+def _spec_metric(tr, spec: dict) -> dict:
+    from app.whatif import compute_metric
+
+    metric = spec.get("metric", "")
+    target = float(spec.get("target", 0))
+    tol = float(spec.get("tol", 0.15))
+    name = spec.get("name") or f"{metric}≈{target:g}(±{tol:.0%})"
+    val, err = compute_metric(tr, metric, spec.get("out", "out"), spec.get("in", "in"))
+    if val is None:
+        return _ck(name, False, f"{err}（信号需写进 raw，见 write 命令）")
+    ok = _near(val, target, tol)
+    ck = _ck(name, ok, f"实测 {val:.4g}（目标 {target:g} ±{tol:.0%}）")
+    # vpp/freq 类差距可触发确定性数值调参（与手写验收器同一闭环）
+    if not ok and metric in ("vpp", "freq"):
+        ck["tune_hint"] = {"kind": metric, "measured": val, "target": target,
+                           "freq": val if metric == "freq" else float(spec.get("freq", 0))}
+    return ck
+
+
+def spec_validators(task: dict) -> list:
+    specs = task.get("specs") or []
+    if not specs:
+        return []
+
+    def v(ev, tr):
+        return [_spec_metric(tr, s) for s in specs]
+    return [v]
+
+
+def get_validators(task) -> list:
+    """task 可以是 task dict（带 specs 走通用验收器）或旧式 id 字符串。"""
+    tid = task.get("id") if isinstance(task, dict) else task
+    v = VALIDATORS.get(tid)
+    if v:
+        return [v]
+    if isinstance(task, dict):
+        return spec_validators(task)
+    return []
