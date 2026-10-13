@@ -33,3 +33,6 @@ bench/regress_report.md
 
 # 便携版构建产物
 dist/
+
+# pip 构建残留
+*.egg-info/
