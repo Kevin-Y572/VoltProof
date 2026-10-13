@@ -26,10 +26,15 @@ def render_wave(traces: Traces, out_png: str | Path, title: str = "") -> Path:
     for i, (name, arr) in enumerate(traces.signals.items()):
         ax1.plot(x[: len(arr)], arr, label=name, linewidth=1.2, color=colors[i % len(colors)])
 
-    xlabel = "time (s)" if traces.time is not None else "sample"
-    ax1.set_xlabel(xlabel)
-    ax1.set_ylabel("voltage / current")
-    ax1.grid(True, alpha=0.3)
+    if traces.analysis == "ac":
+        # 频响看 -3dB/滚降必须在十倍频对数轴上；线性轴会把整个扫频挤成一竖条
+        ax1.set_xscale("log")
+        ax1.set_xlabel("frequency (Hz)")
+        ax1.set_ylabel("magnitude (V)")
+    else:
+        ax1.set_xlabel("time (s)" if traces.time is not None else "sample")
+        ax1.set_ylabel("voltage / current")
+    ax1.grid(True, alpha=0.3, which="both")
     ax1.legend(loc="best", fontsize=8)
     if title:
         ax1.set_title(title, fontsize=10)
@@ -37,6 +42,3 @@ def render_wave(traces: Traces, out_png: str | Path, title: str = "") -> Path:
     fig.savefig(out_png)
     plt.close(fig)
     return out_png
-
-
-# TODO(W1): 双 y 轴（电压/电流混绘）；.ac 结果改用对数横轴。

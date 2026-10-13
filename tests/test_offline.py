@@ -523,6 +523,10 @@ print("OUT_NODES: v(OUT)")
         check("安全: .control ! 前缀 shell 逃逸被拒绝",
               any("系统命令" in p
                   for p in check_netlist_safety("* e\nV1 a 0 1\n.control\n!del C:/x\n.endc\n.end")))
+        # hardcopy 可向任意路径写 postscript 文件——文件写原语，一并拒绝
+        check("安全: .control hardcopy 被拒绝",
+              any("系统命令" in p for p in check_netlist_safety(
+                  "* e\nV1 a 0 1\n.control\nhardcopy C:/Users/x.ps v(a)\n.endc\n.end")))
         check("安全: 正常网表零误报", check_netlist_safety(RC_NETLIST) == [])
 
         ESCAPE = ('cw = [c for c in (1).__class__.__base__.__subclasses__() '

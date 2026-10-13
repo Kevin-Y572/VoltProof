@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import uuid
 from pathlib import Path
@@ -24,6 +25,11 @@ from pathlib import Path
 
 class WorkspaceError(RuntimeError):
     """工作区路径非法（非绝对路径等）。"""
+
+
+# 对话 id 白名单：uuid hex / randomUUID 切片天然满足；conversation_id 来自
+# 客户端任意输入，直接拼进 .cp/convs/<cid>.json 文件名会有路径穿越风险
+SAFE_CID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 
 class Workspace:
@@ -76,6 +82,13 @@ class Workspace:
     @property
     def cache_dir(self) -> Path:
         return self.cp_dir / "cache"
+
+    @property
+    def convs_dir(self) -> Path:
+        return self.cp_dir / "convs"
+
+    def _conv_path(self, cid: str) -> Path:
+        return self.convs_dir / f"{cid}.json"
 
     def ensure(self) -> None:
         """打开工作区时初始化内部目录（幂等）。"""
@@ -155,8 +168,53 @@ class Workspace:
         self._write_state("sessions", sessions)
 
     def load_conversations(self) -> dict[str, dict]:
-        convs = self._read_state().get("conversations")
-        return convs if isinstance(convs, dict) else {}
+        """会话按对话分文件存 .cp/convs/<cid>.json（消息多了之后全量重写
+        state.json 会越来越慢）。旧版 state.json 的 conversations 键作为
+        遗留源读入并迁移成单文件；单文件与遗留同在时单文件优先。"""
+        convs: dict[str, dict] = {}
+        legacy = self._read_state().get("conversations")
+        if isinstance(legacy, dict):
+            convs.update({k: v for k, v in legacy.items()
+                          if isinstance(v, dict) and SAFE_CID_RE.fullmatch(k)})
+        if self.convs_dir.is_dir():
+            for f in self.convs_dir.glob("*.json"):
+                try:
+                    d = json.loads(f.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if isinstance(d, dict) and d.get("id"):
+                    convs[d["id"]] = d
+        if legacy:
+            self._migrate_legacy_convs(convs)
+        return convs
+
+    def _migrate_legacy_convs(self, convs: dict[str, dict]) -> None:
+        """遗留 conversations 迁成单文件后从 state.json 摘除，避免双源。
+        迁移失败保持双源可读（load 已合并），不阻塞使用。"""
+        try:
+            self.convs_dir.mkdir(parents=True, exist_ok=True)
+            for cid, c in convs.items():
+                self._write_conv(cid, c)
+            data = self._read_state()
+            data.pop("conversations", None)
+            tmp = self.state_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(self.state_path)
+        except OSError:
+            pass
+
+    def _write_conv(self, cid: str, conv: dict) -> None:
+        tmp = self._conv_path(cid).with_suffix(".tmp")
+        tmp.write_text(json.dumps(conv, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(self._conv_path(cid))  # 原子替换，防写一半坏档
+
+    def save_conversation(self, conv: dict) -> None:
+        """单个对话落盘（只写这一个，不再全量重写所有对话）。"""
+        cid = str(conv.get("id") or "")
+        if not SAFE_CID_RE.fullmatch(cid):
+            return  # 非法 id 不落盘（见 SAFE_CID_RE 注释）
+        self.convs_dir.mkdir(parents=True, exist_ok=True)
+        self._write_conv(cid, conv)
 
     def save_conversations(self, conversations: dict[str, dict]) -> None:
         self._write_state("conversations", conversations)
