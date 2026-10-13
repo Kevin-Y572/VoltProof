@@ -23,7 +23,7 @@ from .ngspice_runner import run_netlist
 from .render_schematic import render_schematic
 from .render_wave import render_wave
 from .skidl_builder import build_netlist as skidl_build
-from .workspace import Workspace, default_workspace
+from .workspace import SAFE_CID_RE, Workspace, default_workspace
 
 if TYPE_CHECKING:  # 只做类型标注，避免运行时循环依赖
     from .measure import Traces
@@ -115,16 +115,40 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
                  backend: str = "spice",
                  initial_netlist: str | None = None,
                  workspace: Workspace | None = None) -> Evidence:
-    """initial_netlist：用户上传的网表——跳过生成环节直接进"检查→仿真→
-    验收→修复"循环（诊断场景），验证通过后同样进入会话状态供后续修改。
-    workspace：产物与会话状态落点；None 时用缺省工作区（仓库 out/），
-    bench/tests 等旧调用不受影响。"""
+    """同步包装：消费事件生成器，返回最终证据（bench/tests/CLI/MCP 用）。
+    参数语义见 iter_pipeline_events。"""
+    gen = iter_pipeline_events(request, previous_netlist, max_retries,
+                               validators, backend, initial_netlist, workspace)
+    try:
+        while True:
+            next(gen)
+    except StopIteration as s:
+        return s.value  # noqa: F821（生成器 return 的证据）
+
+
+def iter_pipeline_events(request: str, previous_netlist: str | None = None,
+                         max_retries: int = MAX_RETRIES,
+                         validators: list[Validator] | None = None,
+                         backend: str = "spice",
+                         initial_netlist: str | None = None,
+                         workspace: Workspace | None = None):
+    """生成器版本：修复环每前进一步 yield 一个事件（/chat/stream SSE 推送用），
+    跑完 return Evidence。
+
+    事件：{"type": "stage", "round": r, "stage": <见下>, "problems": [...],
+           "note": "可选说明"}
+    stage ∈ generate / attach / cache / guard / static-check / simulate /
+    verify / regenerate / skidl-build / interpret / schematic。
+    initial_netlist：用户上传的网表——跳过生成环节直接进"检查→仿真→
+    验收→修复"循环（诊断场景）。workspace：产物与会话状态落点。"""
     from . import cache as _cache
 
     ws = workspace or default_workspace()
 
     guard = _domain_guard(request)
     if guard is not None:
+        yield {"type": "stage", "round": 0, "stage": "guard",
+               "problems": ["数字逻辑/RTL 需求，已前置拒绝（未调用生成与仿真）"]}
         return guard
 
     # 结果缓存：相同请求（无验收器）直接返回完整证据——演示防翻车
@@ -135,6 +159,7 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
                              if k in Evidence.__dataclass_fields__ and k != "elapsed"})
             ev.elapsed = 0.0
             ev.retry_log.append({"round": 0, "stage": "cache", "problems": []})
+            yield {"type": "stage", "round": 0, "stage": "cache", "problems": []}
             return ev
 
     task_id = ws.new_task_id()
@@ -146,8 +171,9 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
     if initial_netlist:
         netlist = initial_netlist
         ev.retry_log.append({"round": 0, "stage": "attach", "problems": []})
+        yield {"type": "stage", "round": 0, "stage": "attach", "problems": []}
     elif backend == "skidl":
-        netlist = _skidl_track(request, ev)
+        netlist = yield from _skidl_track_events(request, ev)
     else:
         netlist = llm.extract_code_block(
             llm.chat(prompts.GENERATE_SYSTEM, prompts.generate_user(request, previous_netlist))
@@ -158,17 +184,20 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
                 llm.chat(prompts.GENERATE_SYSTEM, prompts.generate_user(request, previous_netlist))
             )
         ev.retry_log.append({"round": 0, "stage": "generate", "problems": []})
+        yield {"type": "stage", "round": 0, "stage": "generate", "problems": []}
 
     tune_history: list[str] = []  # 验收环的调参历史（每轮实测记录，跨轮累积）
     numeric_tunes = 0             # 数值调参次数上限：线性近似不成立时及时回退 LLM
     llm_fix_fails = 0             # 连续 LLM 修复失败次数：≥2 时重启换架构（跳出局部解）
     for rnd in range(max_retries + 1):
-        if not netlist:  # skidl 轨构建彻底失败（日志已在 _skidl_track 里）
+        if not netlist:  # skidl 轨构建彻底失败（日志已在 _skidl_track_events 里）
             break
         # ---- 修复环重启：同一网表连续修不好，说明架构有问题，重新设计 ----
         if llm_fix_fails >= 2:
             ev.retry_log.append({"round": rnd, "stage": "regenerate",
                                  "problems": ["连续修复失败，换一种电路架构重新生成"]})
+            yield {"type": "stage", "round": rnd, "stage": "regenerate",
+                   "problems": ["连续修复失败，换一种电路架构重新生成"]}
             netlist = llm.extract_code_block(
                 llm.chat(prompts.GENERATE_SYSTEM,
                          prompts.generate_user(request, previous_netlist),
@@ -182,6 +211,7 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
         chk = checks.run_checks(netlist)
         if not chk.ok:
             ev.retry_log.append({"round": rnd, "stage": "static-check", "problems": chk.errors})
+            yield {"type": "stage", "round": rnd, "stage": "static-check", "problems": chk.errors}
             if rnd == max_retries:
                 break
             llm_fix_fails += 1
@@ -191,8 +221,9 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
         # ---- 仿真 ----
         sim = run_netlist(netlist, workdir=sim_dir)
         if not sim.ok:
-            ev.retry_log.append({"round": rnd, "stage": "simulate",
-                                 "problems": [sim.error_snippet or "仿真失败且无报错文本"]})
+            probs = [sim.error_snippet or "仿真失败且无报错文本"]
+            ev.retry_log.append({"round": rnd, "stage": "simulate", "problems": probs})
+            yield {"type": "stage", "round": rnd, "stage": "simulate", "problems": probs}
             if rnd == max_retries:
                 break
             llm_fix_fails += 1
@@ -200,14 +231,13 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
             continue
         if sim.raw_path is None:
             # 仿真本身通过但没写出波形数据——报错必须说清楚，否则 LLM 会盲改电路
-            ev.retry_log.append({"round": rnd, "stage": "simulate", "problems": [
-                "仿真通过但没有产出波形数据：网表缺少 write。请在 .control 块中"
-                "添加 set filetype=ascii 和 write out.raw v(输出节点)，其余部分保持不变"]})
+            probs = ["仿真通过但没有产出波形数据：网表缺少 write。请在 .control 块中"
+                     "添加 set filetype=ascii 和 write out.raw v(输出节点)，其余部分保持不变"]
+            ev.retry_log.append({"round": rnd, "stage": "simulate", "problems": probs})
+            yield {"type": "stage", "round": rnd, "stage": "simulate", "problems": probs}
             if rnd == max_retries:
                 break
-            netlist = _repair(netlist, [
-                "仿真通过但没有产出波形数据：网表缺少 write。请在 .control 块中"
-                "添加 set filetype=ascii 和 write out.raw v(输出节点)，其余部分保持不变"])
+            netlist = _repair(netlist, probs)
             continue
 
         # ---- 成功：解析、测指标、出图（修复环计数归零）----
@@ -249,14 +279,19 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
                 if tuned_nl:
                     tune_history.append(f"第 {rnd + 1} 轮（数值调参）：{note}")
                     netlist = tuned_nl
+                    yield {"type": "stage", "round": rnd, "stage": "verify",
+                           "problems": problems, "note": f"数值调参：{note}"}
                 else:
                     tune_history.append(f"第 {rnd + 1} 轮实测未达标：" + "；".join(problems)[:400])
                     netlist = _tune(request, netlist, problems, history=tune_history)
+                    yield {"type": "stage", "round": rnd, "stage": "verify",
+                           "problems": problems, "note": "回喂差距，LLM 调参重跑"}
                 continue
 
         # ---- 全部通过：解读、电路图 ----
         ev.netlist = netlist
         ev.ok = True
+        yield {"type": "stage", "round": rnd, "stage": "interpret", "problems": []}
         ev.interpretation = llm.chat(
             prompts.INTERPRET_SYSTEM,
             prompts.interpret_user(request, netlist, ev.metrics or {"提示": "未解析到波形数据"}),
@@ -266,6 +301,7 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
         # 电路原理图：优先确定性自动布局（网表→graphviz 坐标→按位渲染），
         # 失败才回退 LLM 生成 schemdraw 代码的老路
         try:
+            yield {"type": "stage", "round": rnd, "stage": "schematic", "problems": []}
             from .schematic_layout import render_netlist_schematic
             png = render_netlist_schematic(netlist, doc_dir / "schematic.png",
                                            title=request[:24])
@@ -287,6 +323,27 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
                    cache_dir=ws.cache_dir)
     _write_evidence_file(ev, doc_dir)
     return ev
+
+
+def _skidl_track_events(request: str, ev: "Evidence"):
+    """SKiDL 轨的事件化版本（yield 构建事件，return 网表或 None）。"""
+    code = llm.extract_code_block(llm.chat(prompts.SKIDL_SYSTEM, prompts.skidl_user(request)))
+    ev.generator_code = code
+    for rnd in range(SKIDL_BUILD_FIX + 1):
+        netlist, err = skidl_build(code)
+        if netlist:
+            ev.retry_log.append({"round": rnd, "stage": "skidl-build", "problems": []})
+            yield {"type": "stage", "round": rnd, "stage": "skidl-build", "problems": []}
+            return netlist
+        ev.retry_log.append({"round": rnd, "stage": "skidl-build", "problems": [err[:400]]})
+        yield {"type": "stage", "round": rnd, "stage": "skidl-build", "problems": [err[:400]]}
+        if rnd == SKIDL_BUILD_FIX:
+            return None
+        code = llm.extract_code_block(
+            llm.chat(prompts.SKIDL_REPAIR_SYSTEM, prompts.skidl_repair_user(code, [err]))
+        )
+        ev.generator_code = code
+    return None
 
 
 def _write_evidence_file(ev: Evidence, doc_dir: Path) -> None:
@@ -314,23 +371,13 @@ def _tune(request: str, netlist: str, problems: list[str],
 
 
 def _skidl_track(request: str, ev: "Evidence") -> str | None:
-    """SKiDL 轨：LLM 写 Python 电路代码 → 沙箱执行出网表（代码层修复环），
-    产出的网表进入主管线（静态检查/仿真/验收环与 spice 轨完全复用）。"""
-    code = llm.extract_code_block(llm.chat(prompts.SKIDL_SYSTEM, prompts.skidl_user(request)))
-    ev.generator_code = code
-    for rnd in range(SKIDL_BUILD_FIX + 1):
-        netlist, err = skidl_build(code)
-        if netlist:
-            ev.retry_log.append({"round": rnd, "stage": "skidl-build", "problems": []})
-            return netlist
-        ev.retry_log.append({"round": rnd, "stage": "skidl-build", "problems": [err[:400]]})
-        if rnd == SKIDL_BUILD_FIX:
-            return None
-        code = llm.extract_code_block(
-            llm.chat(prompts.SKIDL_REPAIR_SYSTEM, prompts.skidl_repair_user(code, [err]))
-        )
-        ev.generator_code = code
-    return None
+    """SKiDL 轨（同步版，供需要普通函数调用的场合）：内部消费事件流。"""
+    gen = _skidl_track_events(request, ev)
+    try:
+        while True:
+            next(gen)
+    except StopIteration as s:
+        return s.value
 
 
 # ---------------------------------------------------------------------------
@@ -347,20 +394,31 @@ def _now() -> str:
 
 def get_conversation(conversation_id: str | None = None,
                      workspace: Workspace | None = None) -> dict:
-    """取（或新建）对话记录：消息流 + 最后验证通过的网表（多轮电路上下文）。"""
+    """取（或新建）对话记录：消息流 + 最后验证通过的网表（多轮电路上下文）。
+    conversation_id 来自客户端任意输入，不合法（含路径字符等）一律换新 id。"""
     ws = workspace or default_workspace()
     store = _CONVERSATIONS.setdefault(str(ws.root), ws.load_conversations())
-    cid = conversation_id or uuid.uuid4().hex[:12]
+    cid = conversation_id or ""
+    if not SAFE_CID_RE.fullmatch(cid):
+        cid = uuid.uuid4().hex[:12]
     if cid not in store:
         store[cid] = {"id": cid, "title": "", "created": _now(),
                       "updated": _now(), "netlist": None, "messages": []}
     return store[cid]
 
 
-def _save_conversations(workspace: Workspace) -> None:
-    store = _CONVERSATIONS.get(str(workspace.root))
-    if store is not None:
-        workspace.save_conversations(store)
+def _save_conversations(workspace: Workspace, conv: dict) -> None:
+    workspace.save_conversation(conv)  # 只写这一个对话（分文件存储）
+
+
+def find_conversation(conversation_id: str | None,
+                      workspace: Workspace | None = None) -> dict | None:
+    """只读查找对话（不新建）：what-if 扫描等旁路功能取当前电路用。"""
+    if not conversation_id:
+        return None
+    ws = workspace or default_workspace()
+    store = _CONVERSATIONS.setdefault(str(ws.root), ws.load_conversations())
+    return store.get(conversation_id)
 
 
 def conversation_list(workspace: Workspace | None = None) -> list[dict]:
@@ -434,24 +492,32 @@ def restore_conversation(conversation_id: str,
             "messages": messages}
 
 
-def chat_with_conversation(conversation_id: str | None, message: str,
-                           attachment: dict | None = None,
-                           workspace: Workspace | None = None) -> dict:
-    """attachment: {filename, content}——网表文件直接作为初始电路，文本文件
-    内容并入需求。返回证据包 + conversation_id。"""
+def chat_with_conversation_events(conversation_id: str | None, message: str,
+                                  attachment: dict | None = None,
+                                  workspace: Workspace | None = None):
+    """生成器版本：逐个 yield 管线事件，最后 yield {"type": "done", **响应}。
+    响应 dict 与同步版 chat_with_conversation 完全一致（含 conversation_id）。"""
     ws = workspace or default_workspace()
     c = get_conversation(conversation_id, workspace=ws)
     message = message[:8000]  # 正文限长（防内存滥用）
     initial_netlist = None
     if attachment and attachment.get("content"):
         if len(attachment["content"]) > 256 * 1024:
-            return {"error": "附件超过 256KB 限制"}
+            yield {"type": "error", "error": "附件超过 256KB 限制"}
+            return
         if _looks_like_netlist(attachment.get("filename", ""), attachment["content"]):
             initial_netlist = attachment["content"]
         else:
             message = f"{message}\n\n[附件 {attachment.get('filename', '')} 的内容]\n{attachment['content'][:4000]}"
-    ev = run_pipeline(message, previous_netlist=initial_netlist or c["netlist"],
-                      initial_netlist=initial_netlist, workspace=ws)
+    gen = iter_pipeline_events(message, previous_netlist=initial_netlist or c["netlist"],
+                               initial_netlist=initial_netlist, workspace=ws)
+    ev = None
+    while True:
+        try:
+            yield next(gen)
+        except StopIteration as s:
+            ev = s.value
+            break
     if ev.ok:
         c["netlist"] = ev.netlist  # 只有验证通过的电路才进入对话上下文
     c["messages"].append({"role": "user", "text": message, "ts": _now(),
@@ -460,10 +526,24 @@ def chat_with_conversation(conversation_id: str | None, message: str,
     if not c.get("title"):
         c["title"] = message.strip().replace("\n", " ")[:36]
     c["updated"] = _now()
-    _save_conversations(ws)
+    _save_conversations(ws, c)
     d = ev.to_dict()
     d["conversation_id"] = c["id"]  # 空入参时客户端也能拿到新建的对话 id
-    return d
+    yield {"type": "done", **d}
+
+
+def chat_with_conversation(conversation_id: str | None, message: str,
+                           attachment: dict | None = None,
+                           workspace: Workspace | None = None) -> dict:
+    """同步版（/chat、测试与外部调用用）：消费事件流返回最终响应。"""
+    d: dict = {}
+    for ev in chat_with_conversation_events(conversation_id, message,
+                                            attachment, workspace):
+        if ev.get("type") == "done":
+            d = {k: v for k, v in ev.items() if k != "type"}
+        elif ev.get("type") == "error":
+            d = ev
+    return d or {"error": "管线无响应"}
 
 
 def _looks_like_netlist(filename: str, content: str) -> bool:

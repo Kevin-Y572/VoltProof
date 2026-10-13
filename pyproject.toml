@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "voltproof"
+version = "0.2.0"
+description = "让 AI 的电路答案经过 ngspice 真实仿真验证：自然语言需求 → 网表生成 → ngspice 仿真 → 实测指标/波形/原理图"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+keywords = ["spice", "ngspice", "circuit-simulation", "llm", "eda"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Education",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+]
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "openai>=1.40,<3",
+    "spyci>=0.1",
+    "matplotlib>=3.8",
+    "numpy>=1.26",
+    "schemdraw>=0.19",
+    "skidl>=2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Kevin-Y572/VoltProof"
+
+[project.scripts]
+voltproof = "app.cli:main"
+voltproof-mcp = "app.mcp_server:main"
+
+[tool.setuptools]
+packages = ["app"]
+
+[tool.setuptools.package-data]
+app = ["static/*.html"]

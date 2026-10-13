@@ -162,10 +162,16 @@ def main() -> int:
     check("仿真修复: 记录了 simulate 轮", "simulate" in stages, str(stages))
 
     # ---- 4. 对话多轮：携带上一轮网表，可关闭后恢复 ----
-    # 对话状态已持久化到工作区 state.json——内存与磁盘都要清，
+    # 对话状态按对话分文件持久化（.cp/convs/<cid>.json）——内存与磁盘都要清，
     # 否则上一次测试运行的 conv-test 被水合回来，消息条数翻倍
     pipeline._CONVERSATIONS.clear()
     pipeline.default_workspace().state_path.unlink(missing_ok=True)
+    _sh.rmtree(pipeline.default_workspace().convs_dir, ignore_errors=True)
+    from app.workspace import SAFE_CID_RE
+    evil = pipeline.get_conversation("../../evil")
+    check("对话: 非法 conversation_id 被换成安全新 id",
+          SAFE_CID_RE.fullmatch(evil["id"]) is not None, evil["id"])
+    pipeline._CONVERSATIONS[ws_root].pop(evil["id"], None)  # 不污染后续清单断言
     s1 = Scripted([GOOD, "第一轮解读。"])
     with patch.object(llm, "chat", s1):
         d1 = pipeline.chat_with_conversation("conv-test", "先做1kHz低通")
@@ -176,8 +182,8 @@ def main() -> int:
     gen_user2 = s2.calls[0][1]
     check("对话: 第二轮携带上轮网表", "当前网表" in gen_user2 and "V1 in 0" in gen_user2, gen_user2[:100])
     check("对话: 消息流四条（两轮问答）", len(conv("conv-test")["messages"]) == 4)
-    check("对话: 状态落盘 state.json（重启可恢复）",
-          (pipeline.default_workspace().state_path).exists()
+    check("对话: 状态按对话分文件落盘（重启可恢复）",
+          (pipeline.default_workspace().convs_dir / "conv-test.json").exists()
           and "conv-test" in pipeline.default_workspace().load_conversations())
     # 恢复：消息流完整还原，证据卡从任务档案重建（图片转文件 URL）
     restored = pipeline.restore_conversation("conv-test")
@@ -227,6 +233,7 @@ def main() -> int:
     # ---- 4c. 附件网表：跳过生成直接进仿真（诊断场景） ----
     pipeline._CONVERSATIONS.clear()
     pipeline.default_workspace().state_path.unlink(missing_ok=True)
+    _sh.rmtree(pipeline.default_workspace().convs_dir, ignore_errors=True)
     with patch.object(llm, "chat", Scripted(["附件电路解读：实测-3dB约1kHz。"])) as sc_att:
         d_att = pipeline.chat_with_conversation("att-1", "帮我仿真验证这个电路", attachment={
             "filename": "my.cir", "content": GOOD.replace("```spice\n", "").replace("\n```", "")})
@@ -335,6 +342,28 @@ write out.raw v(out)
               and dt["messages"][1]["evidence"]["ok"] is True, str(dt)[:150])
         r = client.get("/api/convs/none-such")
         check("GET /api/convs/{不存在} 404", r.status_code == 404)
+
+    # ---- 5a. SSE 流式接口：修复环事件逐个推送，末事件 done 带完整证据 ----
+    pipeline._CONVERSATIONS.clear()
+    pipeline.default_workspace().state_path.unlink(missing_ok=True)
+    _sh.rmtree(pipeline.default_workspace().convs_dir, ignore_errors=True)
+    with patch.object(llm, "chat", Scripted([NO_GROUND, GOOD, "流式修复后解读。"])) as _sc_sse, TestClient(app) as client:
+        r = client.post("/chat/stream", json={"conversation_id": "sse-test",
+                                              "message": "1kHz低通流式用例"})
+        txt = r.text
+        check("SSE: 修复环阶段逐事件推送", r.status_code == 200
+              and '"stage": "static-check"' in txt and txt.count("data: ") >= 3,
+              txt[:150])
+        check("SSE: 末事件 done 且证据完整", '"type": "done"' in txt
+              and '"ok": true' in txt and '"conversation_id": "sse-test"' in txt)
+        cl = client.get("/api/convs").json().get("conversations", [])
+        check("SSE: 流式对话同样进入会话记录", any(c["id"] == "sse-test" for c in cl))
+        r = client.get("/api/report/sse-test")
+        check("报告: 导出单文件 HTML（含轮次与网表）", r.status_code == 200
+              and "实验报告" in r.text and "第 1 轮" in r.text and "data:image/png" in r.text,
+              r.text[:120])
+        r = client.get("/api/report/none-such")
+        check("报告: 不存在的对话 404", r.status_code == 404)
 
     with patch.object(llm, "chat", lambda *a, **k: "裸模型回答：用1.6k电阻和100nF电容。"), \
             TestClient(app) as client:

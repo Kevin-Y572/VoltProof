@@ -3,8 +3,9 @@
 启动：uvicorn app.main:app --reload
   http://127.0.0.1:8000            -> static/index.html   产品对话页
   http://127.0.0.1:8000/compare.html -> 同题对照演示页
-  POST /chat      {session_id, message} -> 证据包 JSON（仿真在环）
-  POST /demo/raw  {message}             -> 裸 LLM 回复（对照组，无仿真）
+  POST /chat          {session_id, message} -> 证据包 JSON（仿真在环）
+  POST /chat/stream   同 /chat，但以 SSE 逐事件推送修复环过程（前端进度）
+  POST /demo/raw      {message}             -> 裸 LLM 回复（对照组，无仿真）
 
 工作区：
   启动时经 VOLTPROOF_WORKSPACE 绑定（缺省 = 仓库 out/），运行中可经
@@ -19,11 +20,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from . import llm, pipeline
@@ -31,7 +33,7 @@ from .workspace import Workspace, WorkspaceError, default_workspace
 
 app = FastAPI(title="VoltProof")
 
-_STATIC = Path(__file__).resolve().parent.parent / "static"
+_STATIC = Path(__file__).resolve().parent / "static"  # 随 app 包分发（pip 安装也可用）
 
 
 def _init_workspace() -> Workspace:
@@ -72,6 +74,15 @@ class LlmConfigReq(BaseModel):
     model: str | None = None
 
 
+class WhatifReq(BaseModel):
+    conversation_id: str
+    component: str
+    values: list[str]
+    metric: str = "vpp"
+    out_frag: str = "out"
+    in_frag: str = "in"
+
+
 @app.post("/chat")
 def chat(req: ChatReq):
     """产品管线：生成 → 检查 → 仿真 → 重试 → 证据。对话可跨请求续接。"""
@@ -81,6 +92,25 @@ def chat(req: ChatReq):
                                                attachment=req.attachment, workspace=ws)
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.post("/chat/stream")
+def chat_stream(req: ChatReq):
+    """SSE 版 /chat：修复环每前进一步推一个事件，最后推 done（完整证据包）。
+    事件格式 data: {"type":"stage"|"done"|"error", ...}\\n\\n"""
+    ws = _active_ws
+
+    def gen():
+        try:
+            for ev in pipeline.chat_with_conversation_events(
+                    req.conversation_id, req.message,
+                    attachment=req.attachment, workspace=ws):
+                yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+        except Exception as e:  # 中途异常也要以 error 事件收尾，前端不会挂死
+            yield f'data: {json.dumps({"type": "error", "error": str(e)}, ensure_ascii=False)}\n\n'
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache"})
 
 
 @app.post("/demo/raw")
@@ -197,6 +227,50 @@ def llm_models(req: LlmConfigReq):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
+# ---------------------------------------------------------------------------
+# what-if 参数扫描（本地信任，纯确定性：零 LLM，逐值真实仿真）
+# ---------------------------------------------------------------------------
+
+@app.get("/api/whatif/components")
+def whatif_components(conversation_id: str):
+    """当前对话已验证电路里可扫描的元件清单（R/C/L 与直流源）。"""
+    conv = pipeline.find_conversation(conversation_id, workspace=_active_ws)
+    if not conv or not conv.get("netlist"):
+        return JSONResponse(status_code=400,
+                            content={"error": "当前对话还没有验证通过的电路——先设计一个再扫描"})
+    from .whatif import scan_components
+    return {"components": scan_components(conv["netlist"])}
+
+
+@app.post("/api/whatif")
+def whatif_run(req: WhatifReq):
+    """对指定元件逐值改写并真实仿真，返回逐点指标 + 曲线族图。"""
+    conv = pipeline.find_conversation(req.conversation_id, workspace=_active_ws)
+    if not conv or not conv.get("netlist"):
+        return JSONResponse(status_code=400,
+                            content={"error": "当前对话还没有验证通过的电路"})
+    from . import whatif
+    tid = _active_ws.new_task_id()
+    try:
+        return whatif.run_scan(conv["netlist"], req.component, req.values,
+                               req.metric, req.out_frag, req.in_frag,
+                               workdir=_active_ws.task_sim_dir(tid))
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/api/report/{cid}")
+def report(cid: str):
+    """实验报告：对话 → 单文件 HTML（图片内嵌），浏览器打印即 PDF。"""
+    conv = pipeline.find_conversation(cid, workspace=_active_ws)
+    if conv is None:
+        return JSONResponse(status_code=404, content={"error": "对话不存在"})
+    from .report import build_report_html
+    return HTMLResponse(content=build_report_html(conv, _active_ws),
+                        headers={"Content-Disposition":
+                                 f'inline; filename="voltproof-report-{cid}.html"'})
+
+
 @app.get("/")
 def index():
     return FileResponse(_STATIC / "index.html")
@@ -206,6 +280,3 @@ def index():
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 app.mount("/", StaticFiles(directory=_STATIC, html=True), name="static")
-
-
-# TODO(W3): /chat 改 SSE 流式（边重试边推送日志，演示"AI 被仿真器打回"的过程，观感拉满）

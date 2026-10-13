@@ -79,8 +79,8 @@ async function runBoth() {
       ? `<div style="margin-top:8px">${checks.map(c =>
           `<span class="metric" style="${c.ok ? '' : 'border-color:var(--warn)'}">${c.ok ? '✅' : '❌'} ${escapeHtml(c.name)}</span>`).join('')}</div>` : '';
     document.getElementById('r-body').innerHTML =
-      `<div class="verdict ${d.ok?'ok':'fail'}">${d.ok?'✅ 仿真验证通过':'⚠️ 未通过'}</div>${metrics}${wave}${checksHtml}` +
-      `<pre>${escapeHtml(d.netlist)}</pre>`;
+      `<div class="verdict ${d.ok?'ok':'fail'}">${d.ok?'✅ 仿真验证通过':'⚠️ 未通过'}</div>${metrics}${wave}${checksHtml}`
+      + (d.netlist ? `<pre>${escapeHtml(d.netlist)}</pre>` : '');
   } else { rStatus('失败'); }
   run.disabled = false;
 }

@@ -104,9 +104,46 @@
 <footer>
   <input type="file" id="file" accept=".cir,.sp,.ckt,.net,.spi,.spice,.txt,.md" hidden>
   <button id="attach" title="上传网表或文本文件" style="background:var(--card);border:1px solid var(--line);border-radius:10px;padding:0 14px;font-size:16px;cursor:pointer">📎</button>
+  <button id="whatifBtn" title="what-if 参数扫描：对当前电路改一个元件值，逐点真实仿真看趋势（非 AI 生成）" style="background:var(--card);border:1px solid var(--line);border-radius:10px;padding:0 12px;font-size:14px;cursor:pointer">🔀</button>
   <textarea id="input" rows="1" placeholder="用自然语言描述电路需求…（Enter 发送）"></textarea>
   <button id="send">发送</button>
 </footer>
+
+<div id="whatifDialog" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:40;align-items:center;justify-content:center">
+  <div style="background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;width:520px;max-width:92vw">
+    <b>what-if 参数扫描</b>
+    <p style="color:var(--dim);font-size:12px;margin:6px 0">对当前对话已验证的电路，把一个元件改成多个值逐点<b>真实仿真</b>，看波形族与指标趋势——纯确定性，非 AI 生成。</p>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <div style="flex:1">
+        <label style="color:var(--dim);font-size:12px;display:block;margin-bottom:4px">扫描元件</label>
+        <select id="wfComp" style="width:100%;background:#10131b;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;outline:none"></select>
+      </div>
+      <div style="flex:1">
+        <label style="color:var(--dim);font-size:12px;display:block;margin-bottom:4px">观测指标</label>
+        <select id="wfMetric" style="width:100%;background:#10131b;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;outline:none">
+          <option value="vpp">输出峰峰值</option>
+          <option value="mean">输出均值</option>
+          <option value="freq">主频</option>
+          <option value="gain">增益 (out/in)</option>
+          <option value="fc">-3dB 截止频率</option>
+        </select>
+      </div>
+    </div>
+    <label style="color:var(--dim);font-size:12px;display:block;margin:8px 0 4px">取值（逗号分隔，SPICE 写法，最多 12 个）</label>
+    <input id="wfValues" style="width:100%;background:#10131b;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;outline:none" placeholder="1k, 2.2k, 4.7k, 10k">
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <div style="flex:1"><label style="color:var(--dim);font-size:12px;display:block;margin-bottom:4px">输出节点（片段）</label>
+        <input id="wfOut" value="out" style="width:100%;background:#10131b;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;outline:none"></div>
+      <div style="flex:1"><label style="color:var(--dim);font-size:12px;display:block;margin-bottom:4px">输入节点（增益用）</label>
+        <input id="wfIn" value="in" style="width:100%;background:#10131b;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;outline:none"></div>
+    </div>
+    <div id="wfMsg" style="color:var(--warn);font-size:12px;margin-top:8px;min-height:16px"></div>
+    <div style="margin-top:10px;text-align:right">
+      <button id="wfCancelBtn" style="background:var(--card);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:6px 14px;cursor:pointer">取消</button>
+      <button id="wfRunBtn" style="background:var(--acc);border:none;color:#fff;border-radius:8px;padding:6px 16px;cursor:pointer;margin-left:8px">运行扫描</button>
+    </div>
+  </div>
+</div>
 
 <script>
 let convId = null;      // 当前对话 id；null = 新对话（首条消息发送时落定）
@@ -145,6 +182,11 @@ file.addEventListener('change', async () => {
   input.focus();
 });
 
+const STAGE_NAMES = {generate: '生成网表', attach: '载入附件网表', cache: '缓存命中', guard: '前置拦截',
+                     'static-check': '静态检查', simulate: '仿真执行', measure: '波形解析',
+                     verify: '指标验收', regenerate: '换架构重生成', 'skidl-build': 'SKiDL 构建',
+                     interpret: 'AI 解读', schematic: '原理图渲染'};
+
 async function send() {
   const text = input.value.trim();
   if (!text && !attachment) return;
@@ -153,15 +195,42 @@ async function send() {
   input.value = ""; send_.disabled = true;
   attachment = null; attachBtn.textContent = '📎'; chipInfo.style.display = 'none';
   addMsg('user', text + (att ? ' 📎' + att.filename : ''));
-  const holder = addMsg('assistant', '<span style="color:var(--dim)">仿真验证中…（生成网表 → ngspice 执行 → 指标计算）</span>');
+  const holder = addMsg('assistant',
+    '<div class="evidence"><div class="verdict" style="color:var(--dim)">仿真验证中…</div>'
+    + '<ol class="tl" style="margin:8px 0 0 18px;color:var(--dim);font-size:12.5px;line-height:1.9"></ol></div>');
+  const tl = holder.querySelector('.tl');
+  const addStep = ev => {
+    const li = document.createElement('li');
+    const bad = ev.problems && ev.problems.length;
+    li.innerHTML = `第 ${(ev.round ?? 0) + 1} 轮 · <b style="color:var(--text)">${STAGE_NAMES[ev.stage] || ev.stage}</b>`
+      + (ev.note ? `（${escapeHtml(ev.note)}）` : '')
+      + (bad ? '：' + escapeHtml(ev.problems.join('；')) : '');
+    tl.appendChild(li); chat.scrollTop = chat.scrollHeight;
+  };
   try {
-    const r = await fetch('/chat', {
+    const r = await fetch('/chat/stream', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({conversation_id: convId, message: text || '请仿真验证附件电路', attachment: att})
     });
-    const d = await r.json();
-    if (d.error) holder.innerHTML = `<div class="evidence"><div class="verdict fail">出错了</div>${d.error}</div>`;
-    else holder.innerHTML = renderEvidence(d);
+    if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
+    const reader = r.body.getReader(), dec = new TextDecoder();
+    let buf = '', done = null, errEv = null;
+    while (true) {
+      const {done: rd, value} = await reader.read();
+      if (rd) break;
+      buf += dec.decode(value, {stream: true});
+      let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+        if (!chunk.startsWith('data: ')) continue;
+        let ev; try { ev = JSON.parse(chunk.slice(6)); } catch { continue; }
+        if (ev.type === 'done') done = ev;
+        else if (ev.type === 'error') errEv = ev;
+        else addStep(ev);
+      }
+    }
+    if (done) holder.innerHTML = renderEvidence(done);
+    else holder.innerHTML = `<div class="evidence"><div class="verdict fail">出错了</div>${escapeHtml((errEv && errEv.error) || '连接中断')}</div>`;
   } catch (e) {
     holder.innerHTML = `<div class="evidence">请求失败：${e}</div>`;
   }
@@ -183,9 +252,11 @@ function renderEvidence(d) {
     : d.wave_url ? `<img class="wave" src="${d.wave_url}" alt="仿真波形" loading="lazy">` : '';
   const sch = d.schematic_b64 ? `<img class="wave" src="data:image/png;base64,${d.schematic_b64}" alt="电路原理图">`
     : d.sch_url ? `<img class="wave" src="${d.sch_url}" alt="电路原理图" loading="lazy">` : '';
-  const retries = (d.retry_log || []).filter(r => r.stage !== 'generate');
+  const retries = (d.retry_log || []).filter(r => r.stage !== 'generate' && r.stage !== 'attach');
   const retryHtml = retries.length
-    ? `<details><summary>仿真在环日志（${retries.length} 次自动修复）</summary><pre>${escapeHtml(JSON.stringify(retries, null, 1))}</pre></details>` : '';
+    ? `<details><summary>仿真在环日志（${retries.length} 轮）</summary><ol style="margin:8px 0 0 18px;color:var(--dim);font-size:12.5px;line-height:1.9">`
+      + retries.map(r => `<li>第 ${(r.round ?? 0) + 1} 轮 · <b style="color:var(--text)">${STAGE_NAMES[r.stage] || r.stage}</b>${(r.problems && r.problems.length) ? '：' + escapeHtml(r.problems.join('；')) : '，通过'}</li>`).join('')
+      + '</ol></details>' : '';
   const checks = d.checks || [];
   const checksHtml = checks.length
     ? `<details ${checks.some(c => !c.ok) ? 'open' : ''}><summary>验收明细（${checks.filter(c => c.ok).length}/${checks.length} 项通过）</summary>`
@@ -281,8 +352,15 @@ async function loadConvs() {
     el.innerHTML = `<div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline">
         <b style="font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(c.title)}</b>
         <span style="color:var(--dim);font-size:11px;white-space:nowrap">${escapeHtml(c.updated || '')}</span></div>
-      <div style="color:var(--dim);font-size:11px;margin-top:2px">${c.messages} 条消息${c.id === convId ? ' · 当前' : ''}</div>`;
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:2px">
+        <span style="color:var(--dim);font-size:11px">${c.messages} 条消息${c.id === convId ? ' · 当前' : ''}</span>
+        <span class="repBtn" title="导出实验报告（打印即 PDF）" style="color:var(--acc);font-size:11.5px;cursor:pointer;padding:2px 6px">📄 报告</span>
+      </div>`;
     el.addEventListener('click', () => restoreConv(c.id));
+    el.querySelector('.repBtn').addEventListener('click', e => {
+      e.stopPropagation();
+      window.open('/api/report/' + encodeURIComponent(c.id), '_blank');
+    });
     histList.appendChild(el);
   }
 }
@@ -376,6 +454,72 @@ document.getElementById('llmSaveBtn').addEventListener('click', async () => {
     llmMsg.textContent = String(e.message || e);
   }
 });
+
+// ---- what-if 参数扫描（确定性：改值 → 逐点真实仿真 → 曲线族）----
+const whatifBtn = document.getElementById('whatifBtn'), whatifDialog = document.getElementById('whatifDialog'),
+      wfComp = document.getElementById('wfComp'), wfMetric = document.getElementById('wfMetric'),
+      wfValues = document.getElementById('wfValues'), wfOut = document.getElementById('wfOut'),
+      wfIn = document.getElementById('wfIn'), wfMsg = document.getElementById('wfMsg');
+
+async function openWhatif() {
+  if (!convId) { alert('先发送一条电路需求，有了验证通过的电路才能做 what-if 扫描'); return; }
+  wfMsg.style.color = 'var(--dim)'; wfMsg.textContent = '读取当前电路元件…';
+  try {
+    const r = await fetch('/api/whatif/components?conversation_id=' + encodeURIComponent(convId));
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || '读取失败');
+    const cs = d.components || [];
+    if (!cs.length) throw new Error('当前电路里没有可扫描的元件（R/C/L 与直流源）');
+    wfComp.innerHTML = cs.map(c =>
+      `<option value="${escapeHtml(c.name)}">${escapeHtml(c.name)}（${escapeHtml(c.kind)}，当前 ${escapeHtml(c.value)}，${escapeHtml(c.nodes)}）</option>`).join('');
+    wfMsg.textContent = '';
+    whatifDialog.style.display = 'flex';
+  } catch (e) {
+    wfMsg.style.color = 'var(--warn)'; wfMsg.textContent = String(e.message || e);
+    setTimeout(() => { whatifDialog.style.display = 'flex'; }, 50);
+  }
+}
+
+function fmtNum(v) {
+  const x = +v;
+  if (!isFinite(x)) return String(v);
+  if (x !== 0 && (Math.abs(x) >= 1e6 || Math.abs(x) < 1e-3)) return x.toExponential(3);
+  return (+x.toPrecision(6)).toString();
+}
+
+function renderWhatif(d) {
+  const rows = (d.points || []).map(p =>
+    `<tr><td style="padding:3px 10px 3px 0;font-family:Consolas,monospace">${escapeHtml(p.value)}</td>` +
+    `<td style="padding:3px 10px 3px 0;font-family:Consolas,monospace;color:var(--acc)">${p.ok ? fmtNum(p.metric) : '—'}</td>` +
+    `<td style="padding:3px 0;color:${p.ok ? 'var(--ok)' : 'var(--warn)'}">${p.ok ? '✓ 仿真通过' : escapeHtml(p.error || '')}</td></tr>`).join('');
+  return `<div class="evidence">
+    <div class="verdict">🔀 what-if 扫描：${escapeHtml(d.component)} × ${escapeHtml(d.metric_name)}<span style="font-size:12px;color:var(--dim)">（逐值真实仿真，确定性结果）</span></div>
+    ${d.png_b64 ? `<img class="wave" src="data:image/png;base64,${d.png_b64}">` : ''}
+    <table style="border-collapse:collapse;margin-top:8px;font-size:13px"><thead><tr style="color:var(--dim);font-size:12px"><th align="left" style="padding:0 10px 4px 0">${escapeHtml(d.component)}</th><th align="left" style="padding:0 10px 4px 0">${escapeHtml(d.metric_name)}</th><th align="left">状态</th></tr></thead><tbody>${rows}</tbody></table>
+  </div>`;
+}
+
+document.getElementById('wfRunBtn').addEventListener('click', async () => {
+  const values = wfValues.value.split(/[,，\s]+/).filter(Boolean);
+  if (!values.length) { wfMsg.style.color = 'var(--warn)'; wfMsg.textContent = '请填扫描取值，如 1k, 2.2k, 4.7k'; return; }
+  wfMsg.style.color = 'var(--dim)'; wfMsg.textContent = '逐值仿真中…（每个值一次真实 ngspice 运行）';
+  document.getElementById('wfRunBtn').disabled = true;
+  try {
+    const r = await fetch('/api/whatif', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversation_id: convId, component: wfComp.value, values,
+                             metric: wfMetric.value, out_frag: wfOut.value.trim() || 'out', in_frag: wfIn.value.trim() || 'in' }) });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || '扫描失败');
+    whatifDialog.style.display = 'none';
+    addMsg('assistant', renderWhatif(d));
+  } catch (e) {
+    wfMsg.style.color = 'var(--warn)'; wfMsg.textContent = String(e.message || e);
+  }
+  document.getElementById('wfRunBtn').disabled = false;
+});
+whatifBtn.addEventListener('click', openWhatif);
+document.getElementById('wfCancelBtn').addEventListener('click', () => whatifDialog.style.display = 'none');
+
 </script>
 </body>
 </html>

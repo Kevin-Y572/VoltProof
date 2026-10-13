@@ -165,7 +165,8 @@ def step_app() -> None:
     print("复制应用文件 …")
     ignore = shutil.ignore_patterns("__pycache__", "*.pyc",
                                     "_llm_settings_test_*")
-    for d in ("app", "static", "tests"):
+    # static/ 已并入 app 包内随包分发；此处只拷 app/tests/bench
+    for d in ("app", "tests"):
         shutil.copytree(REPO / d, APPDIR / d, ignore=ignore,
                         dirs_exist_ok=True)
     (APPDIR / "bench").mkdir(exist_ok=True)
