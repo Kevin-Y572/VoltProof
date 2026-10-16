@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "voltproof"
-version = "0.2.0"
+version = "0.3.0"
 description = "让 AI 的电路答案经过 ngspice 真实仿真验证：自然语言需求 → 网表生成 → ngspice 仿真 → 实测指标/波形/原理图"
 readme = "README.md"
 requires-python = ">=3.10"
