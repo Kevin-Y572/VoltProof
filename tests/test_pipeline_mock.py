@@ -167,6 +167,7 @@ def main() -> int:
     pipeline._CONVERSATIONS.clear()
     pipeline.default_workspace().state_path.unlink(missing_ok=True)
     _sh.rmtree(pipeline.default_workspace().convs_dir, ignore_errors=True)
+    pipeline.default_workspace().project_path.unlink(missing_ok=True)
     from app.workspace import SAFE_CID_RE
     evil = pipeline.get_conversation("../../evil")
     check("对话: 非法 conversation_id 被换成安全新 id",
@@ -234,12 +235,14 @@ def main() -> int:
     pipeline._CONVERSATIONS.clear()
     pipeline.default_workspace().state_path.unlink(missing_ok=True)
     _sh.rmtree(pipeline.default_workspace().convs_dir, ignore_errors=True)
+    pipeline.default_workspace().project_path.unlink(missing_ok=True)
     with patch.object(llm, "chat", Scripted(["附件电路解读：实测-3dB约1kHz。"])) as sc_att:
         d_att = pipeline.chat_with_conversation("att-1", "帮我仿真验证这个电路", attachment={
             "filename": "my.cir", "content": GOOD.replace("```spice\n", "").replace("\n```", "")})
     check("附件: 网表直接仿真通过", d_att["ok"] is True, str(d_att.get("retry_log")))
     check("附件: 零次生成调用（跳过 LLM 生成）", len(sc_att.calls) == 1, f"{len(sc_att.calls)} 次")
-    check("附件: 网表进入对话上下文", conv("att-1")["netlist"] is not None)
+    check("附件: 网表进入项目上下文",
+          pipeline.default_workspace().load_project().get("netlist") is not None)
     check("附件: 文本附件并入需求",
           pipeline._looks_like_netlist("note.txt", "设计一个放大器") is False
           and pipeline._looks_like_netlist("a.cir", "任意") is True

@@ -7,7 +7,8 @@
     <工作区>/
     ├── sim/<task_id>/     每次运行独立：circuit.cir、*.raw、ngspice.log
     ├── docs/<task_id>/    wave.png、schematic.png、evidence.json
-    └── .cp/               state.json（会话状态）+ cache/（证据缓存）
+    └── .cp/               state.json + project.json（项目电路权威状态）
+                           + cache/（证据缓存）+ convs/（会话=讨论线程）
 
 路径纪律（本模块的唯一红线）：对外服务的文件访问一律经 resolve() 守卫，
 解析后必须仍在工作区根内，挡住 .. 逃逸、绝对路径与 symlink 跳出。
@@ -80,6 +81,31 @@ class Workspace:
         return self.cp_dir / "state.json"
 
     @property
+    def project_path(self) -> Path:
+        """项目电路权威状态：画布 + 最后验证网表 + 分析设置。
+
+        项目制模型：电路只在项目级（所有线程/画板/what-if 共用这一份），
+        会话退化为纯讨论线程。"""
+        return self.cp_dir / "project.json"
+
+    def load_project(self) -> dict:
+        """读 project.json；损坏/缺失返回空项目（不阻塞启动）。"""
+        try:
+            data = json.loads(self.project_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+        except (OSError, json.JSONDecodeError):
+            pass
+        return {}
+
+    def save_project(self, project: dict) -> None:
+        """原子写 project.json（tmp 替换，防写一半坏档）。"""
+        self.cp_dir.mkdir(parents=True, exist_ok=True)
+        tmp = self.project_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(project, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(self.project_path)
+
+    @property
     def cache_dir(self) -> Path:
         return self.cp_dir / "cache"
 
@@ -129,6 +155,7 @@ class Workspace:
                     "request": str(ev.get("request", ""))[:120],
                     "elapsed": ev.get("elapsed"),
                     "metrics": dict(list((ev.get("metrics") or {}).items())[:6]),
+                    "source": ev.get("source", ""),
                     "files": files,
                 })
             except (OSError, json.JSONDecodeError):

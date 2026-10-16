@@ -40,6 +40,7 @@
   <h1>VoltProof</h1>
   <span>每一份回答都附带仿真证据 · ngspice 验证</span>
   <span id="wsInfo" title="点击切换工作区" style="margin-left:auto;cursor:pointer;color:var(--acc);font-size:12px;max-width:32%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+  <a href="/draw.html" title="交互式电路画板：自己拖元件、连线、仿真" style="background:var(--card);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:3px 10px;font-size:12.5px;cursor:pointer;text-decoration:none">✏ 画电路</a>
   <button id="llmBtn" title="大模型设置（供应商 / API Key / 模型）" style="background:var(--card);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:3px 10px;font-size:12.5px;cursor:pointer">⚙ 模型</button>
   <button id="histBtn" title="对话历史" style="background:var(--card);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:3px 10px;font-size:12.5px;cursor:pointer">对话</button>
 </header>
@@ -394,6 +395,12 @@ document.getElementById('newConvBtn').addEventListener('click', () => {
 
 loadWsInfo();
 
+// 外部直达入口（画板结果卡「💬 对话页继续」等）：/?conv=<cid> 自动恢复该对话
+{
+  const cv = new URLSearchParams(location.search).get('conv');
+  if (cv && /^[A-Za-z0-9_-]{1,64}$/.test(cv)) restoreConv(cv);
+}
+
 // ---- 大模型设置（供应商 URL / API Key / 模型，OpenAI 兼容）----
 async function loadLlmConfig() {
   try {
@@ -462,10 +469,9 @@ const whatifBtn = document.getElementById('whatifBtn'), whatifDialog = document.
       wfIn = document.getElementById('wfIn'), wfMsg = document.getElementById('wfMsg');
 
 async function openWhatif() {
-  if (!convId) { alert('先发送一条电路需求，有了验证通过的电路才能做 what-if 扫描'); return; }
   wfMsg.style.color = 'var(--dim)'; wfMsg.textContent = '读取当前电路元件…';
   try {
-    const r = await fetch('/api/whatif/components?conversation_id=' + encodeURIComponent(convId));
+    const r = await fetch('/api/whatif/components');
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || '读取失败');
     const cs = d.components || [];
@@ -506,7 +512,7 @@ document.getElementById('wfRunBtn').addEventListener('click', async () => {
   document.getElementById('wfRunBtn').disabled = true;
   try {
     const r = await fetch('/api/whatif', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conversation_id: convId, component: wfComp.value, values,
+      body: JSON.stringify({ component: wfComp.value, values,
                              metric: wfMetric.value, out_frag: wfOut.value.trim() || 'out', in_frag: wfIn.value.trim() || 'in' }) });
     const d = await r.json();
     if (!r.ok || d.error) throw new Error(d.error || '扫描失败');

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import sys
 import tempfile
@@ -788,6 +789,221 @@ print("OUT_NODES: v(OUT)")
             else:
                 os.environ["VOLTPROOF_ALLOW_PRIVATE_LLM"] = _old_priv
             _setf.unlink(missing_ok=True)
+
+        # ---- 13. 画板直仿（/api/draw 系列的确定性核心：零 LLM 验证）----
+        from app import draw_api as _draw
+        from app.workspace import Workspace as _WS
+        _dws = _WS(tmp / "draw_ws")
+        _dws.ensure()
+        _dr = _draw.verify_drawn(OP_NETLIST, "分压实测", _dws)
+        check("画板: 分压直仿通过", _dr["ok"] and _dr["stage"] == "done",
+              f"stage={_dr['stage']} err={_dr['error'][:120]}")
+        check("画板: 分压实测 v(out)=5V",
+              _dr["metrics"] and abs(_dr["metrics"].get("v(out)_mean", 0) - 5.0) < 0.05,
+              str(_dr.get("metrics")))
+        check("画板: 波形/原理图 base64 产出",
+              bool(_dr["waveform_b64"]) and bool(_dr["schematic_b64"]))
+        check("画板: evidence.json 落盘",
+              (_dws.docs_dir / _dr["task_id"] / "evidence.json").is_file())
+
+        _dbg = _draw.verify_drawn(BAD_NETLIST, "无地+浮空", _dws)
+        check("画板: 无地/浮空被静态检查拦下",
+              (not _dbg["ok"]) and _dbg["stage"] == "checks" and _dbg["errors"],
+              f"stage={_dbg['stage']}")
+
+        _devil = """* evil
+V1 a 0 1
+R1 a 0 1k
+.control
+system calc
+.endc
+.end
+"""
+        _dsec = _draw.verify_drawn(_devil, "危险指令", _dws)
+        check("画板: 危险 control 指令被安全门拦截",
+              (not _dsec["ok"]) and _dsec["stage"] == "safety", f"stage={_dsec['stage']}")
+
+        _dsing = """* capacitive divider: 静态检查能过（无浮空/有地），op 无直流通路报奇异矩阵
+V1 a 0 DC 1
+C1 a b 1u
+C2 b 0 1u
+.control
+set filetype=ascii
+op
+write out.raw v(b)
+.endc
+.end
+"""
+        _dsn = _draw.verify_drawn(_dsing, "悬空矩阵", _dws)
+        check("画板: 仿真失败带画板提示",
+              (not _dsn["ok"]) and _dsn["stage"] == "simulate" and _dsn["hint"],
+              f"stage={_dsn['stage']}")
+
+        _dcid = "drawoff99"  # 项目制：画板轮不再写会话（历史由任务档案承载）
+        _pnl = _dws.load_project().get("netlist") or ""
+        check("画板: 成功结果写入项目上下文（what-if 可用）",
+              "R2" in _pnl and "DC 12" in _pnl, _pnl[:80])
+        check("画板: 画板轮不创建会话（线程与画板解耦）",
+              not (_dws.convs_dir / f"{_dcid}.json").exists()
+              and not list(_dws.convs_dir.glob("*.json")))
+
+        # AI 解读：先验证"空项目给可读错误"（此时 project.netlist 已被分压实测
+        # 填入，用独立空工作区验证），再 stub llm.chat 验证正常路径（零网络）
+        from app.workspace import Workspace as _WS2
+        _dws_empty = _WS2(tmp / "draw_ws_empty")
+        _dws_empty.ensure()
+        _derr = _draw.interpret_drawn(_dws_empty)
+        check("画板: 无电路时解读给可读错误", "error" in _derr and "先点" in _derr["error"])
+        _old_chat = llm.chat
+        try:
+            llm.chat = lambda *a, **kw: "这是测试解读。"
+            _dint = _draw.interpret_drawn(_dws)
+            check("画板: 解读文本返回", _dint.get("text") == "这是测试解读。")
+            _evj = (_dws.docs_dir / _dr["task_id"] / "evidence.json").read_text(encoding="utf-8")
+            check("画板: 解读回写任务档案（实验报告随之完整）",
+                  "这是测试解读。" in _evj)
+        finally:
+            llm.chat = _old_chat
+
+        # ---- 14. AI 画图：网表 → 画布的确定性转换（拓扑零短路的硬约束）----
+        from app import canvas_layout as _cl
+        from app.canvas_layout import netlist_to_canvas
+
+        CE_NETLIST = """\\
+* CE amplifier
+Vcc vcc 0 DC 12
+Vin in 0 SIN(0 0.02 1k)
+Cin in base 10u
+Rb1 vcc base 120k
+Rb2 base 0 20k
+Q1 col base emit 2N2222
+Rc vcc col 6k
+Re emit 0 500
+Cout col out 10u
+Rload out 0 100k
+.model 2N2222 NPN(bf=150)
+.control
+set filetype=ascii
+tran 10u 5m
+write out.raw v(out) v(in)
+.endc
+.end
+"""
+        BRIDGE_NETLIST = """\\
+* bridge rectifier
+V1 a b SIN(0 12 50)
+D1 a p DM1
+D2 b p DM2
+D3 n b DM3
+D4 n a DM4
+R1 p n 1k
+C1 p n 100u
+.model DM1 D
+.model DM2 D
+.model DM3 D
+.model DM4 D
+.control
+set filetype=ascii
+tran 100u 60m
+write out.raw v(p) v(n)
+.endc
+.end
+"""
+        _c1 = netlist_to_canvas(AC_NETLIST)
+        check("画布: RC 低通转换成功", _c1 is not None)
+        if _c1:
+            _types = [c["type"] for c in _c1["comps"]]
+            check("画布: RC 元件/接地映射正确",
+                  _types.count("R") == 1 and _types.count("C") == 1
+                  and _types.count("GND") >= 1)
+            check("画布: 分析类型回填（ac 10→100k）",
+                  (_c1["analysis"] or {}).get("type") == "ac"
+                  and (_c1["analysis"] or {}).get("fstop") == "100k")
+            check("画布: write 输出网络贴标签", "out" in {l["text"] for l in _c1["labels"]})
+
+        _c2 = netlist_to_canvas(CE_NETLIST)
+        check("画布: 共射放大转换成功（拓扑终检过）", _c2 is not None)
+        if _c2:
+            _t2 = [c["type"] for c in _c2["comps"]]
+            check("画布: 三极管→QN / 正弦源→VSIN",
+                  "QN" in _t2 and "VSIN" in _t2)
+            _l2 = {l["text"] for l in _c2["labels"]}
+            check("画布: 电源与输出网络标签", {"vcc", "out", "in"} <= _l2)
+            check("画布: 画板边界内落位",
+                  all(0 <= c["x"] <= 50 and 0 <= c["y"] <= 35 for c in _c2["comps"]))
+
+        _c3 = netlist_to_canvas(BRIDGE_NETLIST)
+        check("画布: 桥式整流转换成功（非平面拓扑也能布）", _c3 is not None)
+        if _c3:
+            check("画布: 桥式四二极管齐全",
+                  [c["type"] for c in _c3["comps"]].count("D") == 4)
+
+        check("画布: 空网表返回 None", netlist_to_canvas("* empty\\n.end\\n") is None)
+
+        # GND 引脚必须落在导线格点上（前端"共格点即连通"，否则合成网表失去节点 0）
+        def _gnd_wired(cv):
+            cover = set()
+            for w in cv["wires"]:
+                cover |= _cl._wire_pts([tuple(p) for p in w["pts"]])
+            for c in cv["comps"]:
+                if c["type"] == "GND":
+                    if (c["x"], c["y"]) not in cover:
+                        return False
+            return True
+        for _nm, _cv in (("RC", _c1), ("CE", _c2), ("桥式", _c3)):
+            if _cv:
+                check(f"画布: {_nm} 接地符号接入导线网", _gnd_wired(_cv))
+
+        # ---- 15. 项目制：电路唯一权威在 project.json，会话是纯讨论线程 ----
+        _pws = _WS(tmp / "proj_ws")
+        _pws.ensure()
+        _pws.save_project({"name": "测试项目", "canvas": {"comps": [{"type": "R", "x": 5, "y": 5,
+                              "rot": 0, "name": "R1", "value": "1k"}], "wires": [], "labels": []},
+                           "analysis": {"type": "op"}})
+        _pr = _pws.load_project()
+        check("项目: 读写往返", _pr.get("name") == "测试项目"
+              and _pr["canvas"]["comps"][0]["name"] == "R1"
+              and _pr["analysis"]["type"] == "op")
+        (_pws.cp_dir / "project.json").write_text("{broken", encoding="utf-8")
+        check("项目: 损坏容错返回空", _pws.load_project() == {})
+        _pws.save_project({})
+
+        # chat 线程（stub LLM）：项目上下文更新、线程文件无 netlist 写入
+        from app import pipeline as _pl
+        _pl._CONVERSATIONS.clear()
+        _RC_CHAT = """```spice
+* RC chat
+V1 in 0 SIN(0 1 1k)
+R1 in out 2k
+C1 out 0 100n
+.control
+set filetype=ascii
+tran 10u 5m
+write out.raw v(out)
+.endc
+.end
+```"""
+        _old_chat2 = llm.chat
+        try:
+            llm.chat = lambda *a, **kw: _RC_CHAT
+            _pl.chat_with_conversation("proj-thread-1", "做一个RC低通", workspace=_pws)
+        finally:
+            llm.chat = _old_chat2
+        _thr = json.loads((_pws.convs_dir / "proj-thread-1.json").read_text(encoding="utf-8"))
+        check("项目: chat 线程成功轮写入项目电路",
+              "R1" in (_pws.load_project().get("netlist") or ""))
+        check("项目: 线程不再存电路快照",
+              not _thr.get("netlist") and len(_thr["messages"]) == 2)
+
+        # whatif 扫描元件清单走项目电路
+        from app.whatif import scan_components
+        check("项目: what-if 元件清单来自项目电路",
+              any(c["name"] == "R1" for c in scan_components(_pws.load_project()["netlist"])))
+
+        # source 标记：画板轮/线程轮的任务档案可区分（项目时间线数据源）
+        _draw2 = _draw.verify_drawn(OP_NETLIST, "项目制分压", _pws)
+        _srcs = {t.get("source") for t in _pws.list_tasks(limit=20)}
+        check("项目: 任务档案带 source 标记", {"chat", "draw-sim"} <= _srcs, str(_srcs))
 
         print(f"\n{'='*40}\n{'全部通过' if not FAILURES else '失败: ' + ', '.join(FAILURES)}")
     finally:

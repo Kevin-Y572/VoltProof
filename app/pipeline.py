@@ -53,6 +53,7 @@ class Evidence:
     task_dir: str = ""        # 任务产物目录绝对路径（sim/docs 各有同名子目录）
     elapsed: float = 0.0
     rejected: bool = False  # 领域守卫前置拒绝（与仿真失败区分）
+    source: str = ""  # 产生来源：chat（对话线程）/ draw-sim（画板直仿）/ draw-ai（AI 画图轮）
 
     def to_dict(self) -> dict:
         return {
@@ -70,6 +71,7 @@ class Evidence:
             "retry_log": self.retry_log,
             "checks": self.checks,
             "elapsed": round(self.elapsed, 1),
+            "source": self.source,
         }
 
 
@@ -131,7 +133,8 @@ def iter_pipeline_events(request: str, previous_netlist: str | None = None,
                          validators: list[Validator] | None = None,
                          backend: str = "spice",
                          initial_netlist: str | None = None,
-                         workspace: Workspace | None = None):
+                         workspace: Workspace | None = None,
+                         source: str = ""):
     """生成器版本：修复环每前进一步 yield 一个事件（/chat/stream SSE 推送用），
     跑完 return Evidence。
 
@@ -140,13 +143,17 @@ def iter_pipeline_events(request: str, previous_netlist: str | None = None,
     stage ∈ generate / attach / cache / guard / static-check / simulate /
     verify / regenerate / skidl-build / interpret / schematic。
     initial_netlist：用户上传的网表——跳过生成环节直接进"检查→仿真→
-    验收→修复"循环（诊断场景）。workspace：产物与会话状态落点。"""
+    验收→修复"循环（诊断场景）。workspace：产物与会话状态落点。
+    source：产生来源标记（chat / draw-ai），随 evidence.json 落盘——
+    项目时间线按它区分轮次类型；必须在 Evidence 创建时传入（档案在
+    管线内部写盘，外层补设为时已晚）。"""
     from . import cache as _cache
 
     ws = workspace or default_workspace()
 
     guard = _domain_guard(request)
     if guard is not None:
+        guard.source = source or "chat"
         yield {"type": "stage", "round": 0, "stage": "guard",
                "problems": ["数字逻辑/RTL 需求，已前置拒绝（未调用生成与仿真）"]}
         return guard
@@ -158,6 +165,7 @@ def iter_pipeline_events(request: str, previous_netlist: str | None = None,
             ev = Evidence(**{k: v for k, v in cached.items()
                              if k in Evidence.__dataclass_fields__ and k != "elapsed"})
             ev.elapsed = 0.0
+            ev.source = source or "chat"
             ev.retry_log.append({"round": 0, "stage": "cache", "problems": []})
             yield {"type": "stage", "round": 0, "stage": "cache", "problems": []}
             return ev
@@ -165,7 +173,8 @@ def iter_pipeline_events(request: str, previous_netlist: str | None = None,
     task_id = ws.new_task_id()
     sim_dir = ws.task_sim_dir(task_id)
     doc_dir = ws.task_docs_dir(task_id)
-    ev = Evidence(request=request, task_id=task_id, task_dir=str(doc_dir))
+    ev = Evidence(request=request, task_id=task_id, task_dir=str(doc_dir),
+                  source=source or "chat")
     t0 = time.monotonic()
 
     if initial_netlist:
@@ -510,8 +519,8 @@ def chat_with_conversation_events(conversation_id: str | None, message: str,
             initial_netlist = attachment["content"]
         else:
             message = f"{message}\n\n[附件 {attachment.get('filename', '')} 的内容]\n{attachment['content'][:4000]}"
-    gen = iter_pipeline_events(message, previous_netlist=initial_netlist or c["netlist"],
-                               initial_netlist=initial_netlist, workspace=ws)
+    gen = iter_pipeline_events(message, previous_netlist=initial_netlist or ws.load_project().get("netlist"),
+                               initial_netlist=initial_netlist, workspace=ws, source="chat")
     ev = None
     while True:
         try:
@@ -520,7 +529,11 @@ def chat_with_conversation_events(conversation_id: str | None, message: str,
             ev = s.value
             break
     if ev.ok:
-        c["netlist"] = ev.netlist  # 只有验证通过的电路才进入对话上下文
+        # 项目制：电路上下文在项目级（所有线程共用），不再写会话
+        _proj = ws.load_project()
+        _proj["netlist"] = ev.netlist  # 只有验证通过的电路才进入项目上下文
+        _proj["updated"] = _now()
+        ws.save_project(_proj)
     c["messages"].append({"role": "user", "text": message, "ts": _now(),
                           "attachment": attachment and attachment.get("filename")})
     c["messages"].append(_assistant_entry(ev))

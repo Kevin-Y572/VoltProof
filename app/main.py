@@ -2,10 +2,13 @@
 
 启动：uvicorn app.main:app --reload
   http://127.0.0.1:8000            -> static/index.html   产品对话页
+  http://127.0.0.1:8000/draw.html  -> 交互式电路画板（拖放连线，直仿零 LLM）
   http://127.0.0.1:8000/compare.html -> 同题对照演示页
   POST /chat          {session_id, message} -> 证据包 JSON（仿真在环）
   POST /chat/stream   同 /chat，但以 SSE 逐事件推送修复环过程（前端进度）
   POST /demo/raw      {message}             -> 裸 LLM 回复（对照组，无仿真）
+  POST /api/draw/verify   {netlist}         -> 画板网表直仿（安全门+静态检查+ngspice，零 LLM）
+  POST /api/draw/interpret {conversation_id} -> AI 解读画板最近一次仿真（只解释不改）
 
 工作区：
   启动时经 VOLTPROOF_WORKSPACE 绑定（缺省 = 仓库 out/），运行中可经
@@ -75,12 +78,33 @@ class LlmConfigReq(BaseModel):
 
 
 class WhatifReq(BaseModel):
-    conversation_id: str
     component: str
     values: list[str]
     metric: str = "vpp"
     out_frag: str = "out"
     in_frag: str = "in"
+
+
+class DrawVerifyReq(BaseModel):
+    conversation_id: str | None = None  # 兼容保留：项目制下不再使用
+    title: str = "未命名电路"
+    netlist: str
+
+
+class DrawInterpretReq(BaseModel):
+    conversation_id: str | None = None  # 兼容保留：项目制下不再使用
+
+
+class DrawAiReq(BaseModel):
+    conversation_id: str | None = None  # 兼容保留：项目制下不再使用
+    message: str
+    canvas_netlist: str | None = None  # 画布当前网表（空画布=生成，非空=修改）
+
+
+class ProjectPutReq(BaseModel):
+    name: str | None = None
+    canvas: dict | None = None    # {comps, wires, labels}
+    analysis: dict | None = None  # {type, tstop, fstart, fstop}
 
 
 @app.post("/chat")
@@ -228,35 +252,129 @@ def llm_models(req: LlmConfigReq):
 
 
 # ---------------------------------------------------------------------------
-# what-if 参数扫描（本地信任，纯确定性：零 LLM，逐值真实仿真）
+# 项目（电路唯一权威表示：画布 + 最后验证网表；所有线程/画板共用）
+# ---------------------------------------------------------------------------
+
+@app.get("/api/project")
+def project_get():
+    p = _active_ws.load_project()
+    return {"name": p.get("name") or "",
+            "canvas": p.get("canvas"),
+            "analysis": p.get("analysis"),
+            "updated": p.get("updated") or "",
+            "has_netlist": bool(p.get("netlist"))}
+
+
+@app.put("/api/project")
+def project_put(req: ProjectPutReq):
+    """画板编辑防抖保存。轻校验（三数组、坐标钳到画布内、总体积上限），
+    校验不过 400 且不落盘——绝不写坏 project.json。"""
+    try:
+        payload = json.dumps(req.canvas or {}, ensure_ascii=False)
+    except (TypeError, ValueError) as e:
+        return JSONResponse(status_code=400, content={"error": f"画布序列化失败：{e}"})
+    if len(payload) > 256 * 1024:
+        return JSONResponse(status_code=400, content={"error": "画布过大（>256KB）"})
+    canvas = req.canvas
+    if canvas is not None:
+        if not isinstance(canvas, dict) or not all(
+                isinstance(canvas.get(k), list) for k in ("comps", "wires", "labels")):
+            return JSONResponse(status_code=400,
+                                content={"error": "画布结构非法：需要 comps/wires/labels 三个数组"})
+        for c in canvas["comps"]:
+            if not isinstance(c, dict):
+                return JSONResponse(status_code=400, content={"error": "元件结构非法"})
+            c["x"] = max(0, min(50, int(c.get("x") or 0)))
+            c["y"] = max(0, min(35, int(c.get("y") or 0)))
+            c["rot"] = max(0, min(3, int(c.get("rot") or 0)))
+    p = _active_ws.load_project()
+    if req.name is not None:
+        p["name"] = req.name[:80]
+    if canvas is not None:
+        p["canvas"] = canvas
+    if req.analysis is not None and isinstance(req.analysis, dict):
+        p["analysis"] = {k: str(v)[:16] for k, v in req.analysis.items()
+                         if k in ("type", "tstop", "fstart", "fstop")}
+    p["updated"] = pipeline._now()
+    _active_ws.save_project(p)
+    return {"ok": True, "updated": p["updated"]}
+
+
+# ---------------------------------------------------------------------------
+# what-if 参数扫描（本地信任，纯确定性：零 LLM，逐值真实仿真；项目电路）
 # ---------------------------------------------------------------------------
 
 @app.get("/api/whatif/components")
-def whatif_components(conversation_id: str):
-    """当前对话已验证电路里可扫描的元件清单（R/C/L 与直流源）。"""
-    conv = pipeline.find_conversation(conversation_id, workspace=_active_ws)
-    if not conv or not conv.get("netlist"):
+def whatif_components():
+    """项目当前电路里可扫描的元件清单（R/C/L 与直流源）。"""
+    netlist = _active_ws.load_project().get("netlist")
+    if not netlist:
         return JSONResponse(status_code=400,
-                            content={"error": "当前对话还没有验证通过的电路——先设计一个再扫描"})
+                            content={"error": "本项目还没有验证通过的电路——先设计一个再扫描"})
     from .whatif import scan_components
-    return {"components": scan_components(conv["netlist"])}
+    return {"components": scan_components(netlist)}
 
 
 @app.post("/api/whatif")
 def whatif_run(req: WhatifReq):
-    """对指定元件逐值改写并真实仿真，返回逐点指标 + 曲线族图。"""
-    conv = pipeline.find_conversation(req.conversation_id, workspace=_active_ws)
-    if not conv or not conv.get("netlist"):
+    """对项目电路的指定元件逐值改写并真实仿真，返回逐点指标 + 曲线族图。"""
+    netlist = _active_ws.load_project().get("netlist")
+    if not netlist:
         return JSONResponse(status_code=400,
-                            content={"error": "当前对话还没有验证通过的电路"})
+                            content={"error": "本项目还没有验证通过的电路"})
     from . import whatif
     tid = _active_ws.new_task_id()
     try:
-        return whatif.run_scan(conv["netlist"], req.component, req.values,
+        return whatif.run_scan(netlist, req.component, req.values,
                                req.metric, req.out_frag, req.in_frag,
                                workdir=_active_ws.task_sim_dir(tid))
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+# ---------------------------------------------------------------------------
+# 画板端点（本地信任；确定性直仿零 LLM，AI 解读显式触发且只解释不改电路）
+# ---------------------------------------------------------------------------
+
+@app.post("/api/draw/verify")
+def draw_verify(req: DrawVerifyReq):
+    """画板网表直仿：静态检查 → ngspice → 波形/指标/原理图。不进 LLM 修复环。"""
+    from . import draw_api
+    try:
+        return draw_api.verify_drawn(req.netlist, req.title.strip() or "未命名电路",
+                                     _active_ws)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.post("/api/draw/interpret")
+def draw_interpret(req: DrawInterpretReq):
+    """AI 解读项目电路：LLM 只解释最近一次仿真结果，不修改电路。"""
+    from . import draw_api
+    try:
+        return draw_api.interpret_drawn(_active_ws)
+    except llm.LLMError as e:
+        return JSONResponse(status_code=400, content={"error": f"大模型不可用：{e}"})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.post("/api/draw/ai/stream")
+def draw_ai_stream(req: DrawAiReq):
+    """AI 画图轮（SSE）：自然语言 → 生成/修改网表 → 修复环验证 → 网表确定性
+    布局成画布 schema。事件格式与 /chat/stream 一致；done 额外带 canvas。"""
+    from . import draw_api
+    ws = _active_ws
+
+    def gen():
+        try:
+            for ev in draw_api.ai_draw_events(req.message, req.canvas_netlist, ws):
+                yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+        except Exception as e:  # 中途异常也要以 error 事件收尾，前端不会挂死
+            yield f'data: {json.dumps({"type": "error", "error": str(e)}, ensure_ascii=False)}\n\n'
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/report/{cid}")
