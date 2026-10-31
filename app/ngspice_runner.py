@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -185,8 +186,24 @@ def _run_capped(args: list, cwd: Path, timeout: int, cap: int = 8 * 1024 * 1024)
         timed_out = True
     t_out.join(timeout=2)
     t_err.join(timeout=2)
+    if not t_out.is_alive():
+        p.stdout.close()
+    if not t_err.is_alive():
+        p.stderr.close()
     text = lambda parts: b"".join(parts).decode("utf-8", errors="replace")  # noqa: E731
     return rc, text(buf["out"]), text(buf["err"]), exceeded.is_set(), timed_out
+
+
+@lru_cache(maxsize=1)
+def simulator_info():
+    try:
+        proc = subprocess.run([_NGSPICE, "--version"], capture_output=True, timeout=5,
+                              encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+        match = re.search(r"ngspice[-\s]+(\d+(?:\.\d+)*)", proc.stdout + proc.stderr, re.I)
+        version = match[1] if match else "unknown"
+    except (OSError, subprocess.TimeoutExpired):
+        version = "unknown"
+    return {"name":"ngspice", "version":version, "executable":_NGSPICE}
 
 
 def run_netlist(netlist_text: str, workdir: str | Path | None = None) -> SimResult:

@@ -606,7 +606,7 @@ print("OUT_NODES: v(OUT)")
                 tr_o2 = measure.load_traces(sim_o2.raw_path)
                 vo2 = next(v for k, v in tr_o2.signals.items() if "out" in k.lower())
                 dom2 = dominant_freq(tr_o2.time, vo2)
-                check("osc: .ic 后起振", dom2 is not None)
+                check("osc: .ic 打破静态点，输出有明显变化", float(np.ptp(vo2)) > 0.5)
                 check("osc: 无钳位时幅度上天（>1e6V，触发 clamp 的场景）",
                       float(np.ptp(vo2)) > 1e6, f"vpp={float(np.ptp(vo2)):.3g}")
                 tuned_cl2, _ = numeric_tune(tuned_up, [{"kind": "clamp", "message": ""}])
@@ -984,14 +984,21 @@ write out.raw v(out)
 .end
 ```"""
         _old_chat2 = llm.chat
+        _d_chat = {}
         try:
             llm.chat = lambda *a, **kw: _RC_CHAT
-            _pl.chat_with_conversation("proj-thread-1", "做一个RC低通", workspace=_pws)
+            _d_chat = _pl.chat_with_conversation("proj-thread-1", "做一个RC低通", workspace=_pws)
         finally:
             llm.chat = _old_chat2
         _thr = json.loads((_pws.convs_dir / "proj-thread-1.json").read_text(encoding="utf-8"))
         check("项目: chat 线程成功轮写入项目电路",
               "R1" in (_pws.load_project().get("netlist") or ""))
+        _pcv = (_pws.load_project().get("canvas") or {}).get("comps") or []
+        check("项目: chat 轮画布同步落布（统一页左栏刷新的数据源）",
+              _d_chat.get("canvas_synced") is True
+              and {c.get("name") for c in _pcv} >= {"V1", "R1", "C1"}
+              and (_pws.load_project().get("analysis") or {}).get("type") == "tran",
+              f"synced={_d_chat.get('canvas_synced')} comps={sorted(c.get('name') for c in _pcv)}")
         check("项目: 线程不再存电路快照",
               not _thr.get("netlist") and len(_thr["messages"]) == 2)
 

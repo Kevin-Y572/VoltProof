@@ -31,6 +31,15 @@ import sys
 
 from .pipeline import run_pipeline
 
+_SPEC_SCHEMA = {"type": "array", "description": "固定验收条件；基本单位 Hz、V、倍、%",
+    "items": {"type":"object", "properties": {
+        "metric":{"type":"string","enum":["fc","gain","ripple","mean","vpp","freq","rms","thd"]},
+        "target":{"type":"number"}, "op":{"type":"string","enum":["near","lt","le","gt","ge"]},
+        "tol":{"type":"number","minimum":0,"maximum":1},
+        "out":{"type":"string"},"in":{"type":"string"},
+        "filter_type":{"type":"string","enum":["lowpass","highpass"]}},
+        "required":["metric","target"]}}
+
 _TOOLS = [
     {
         "name": "design_circuit",
@@ -47,6 +56,7 @@ _TOOLS = [
                             "description": "电路需求，例如：设计截止频率1kHz的RC低通滤波器并验证"},
                 "backend": {"type": "string", "enum": ["spice", "skidl"],
                             "description": "spice=直接写网表（默认）；skidl=写SKiDL代码构建网表"},
+                "requirements": _SPEC_SCHEMA,
             },
             "required": ["request"],
         },
@@ -55,12 +65,14 @@ _TOOLS = [
         "name": "verify_netlist",
         "description": (
             "验证一份 SPICE 网表：静态检查 → ngspice 真实仿真 → 实测指标；"
-            "失败时自动修复并返回修复后的完整网表。适合检查别处生成的电路答案。"
+            "默认原样验证；repair=true 时生成修复版本。支持独立的结构化指标验收。"
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "netlist": {"type": "string", "description": "完整 SPICE 网表文本"},
+                "requirements": _SPEC_SCHEMA,
+                "repair": {"type":"boolean", "default":False, "description":"是否生成修复版本；默认原样验证"},
             },
             "required": ["netlist"],
         },
@@ -69,14 +81,20 @@ _TOOLS = [
 
 
 def _fmt_evidence(ev) -> str:
-    verdict = "✅ 仿真验证通过" if ev.ok else "⚠️ 自动修复后仍未通过"
+    verdict = {"passed":"✅ 指标达标", "simulated":"仿真完成，尚未设置验收目标",
+               "incomplete":"验证不完整", "cancelled":"任务已取消"}.get(ev.verdict, "⚠️ 未通过验证")
     lines = [verdict, f"需求：{ev.request}", f"耗时：{ev.elapsed:.1f}s"]
+    for c in ev.checks:
+        lines.append(f"  {'✓' if c.get('ok') else '未验证' if c.get('ok') is None else '✗'} {c.get('name')}: {c.get('detail')}")
+    lines += [f"提示：{w}" for w in ev.warnings]
     if ev.metrics:
         lines.append("实测指标（ngspice 实测）：")
         lines += [f"  - {k} = {v}" for k, v in list(ev.metrics.items())[:12]]
     if ev.retry_log:
         n = len([r for r in ev.retry_log if r.get("problems")])
-        lines.append(f"修复环：{n} 轮（每轮报错已回喂修正）")
+        lines.append(f"验证过程：{n} 次检查/仿真未通过")
+        for r in ev.retry_log:
+            lines += [f"  - {problem}" for problem in r.get("problems", [])[:3]]
     if ev.netlist:
         lines.append("网表：")
         lines.append("```spice")
@@ -87,14 +105,15 @@ def _fmt_evidence(ev) -> str:
     return "\n".join(lines)
 
 
-def _dispatch(name: str, args: dict) -> str:
+def _dispatch(name: str, args: dict):
     if name == "design_circuit":
-        ev = run_pipeline(args["request"], backend=args.get("backend", "spice"))
-        return _fmt_evidence(ev)
+        ev = run_pipeline(args["request"], backend=args.get("backend", "spice"), requirements=args.get("requirements"))
+        return ev
     if name == "verify_netlist":
         ev = run_pipeline("仿真验证用户提供的网表并给出实测指标",
-                          initial_netlist=args["netlist"])
-        return _fmt_evidence(ev)
+                          initial_netlist=args["netlist"], requirements=args.get("requirements"),
+                          allow_repair=args.get("repair", False), include_interpretation=False)
+        return ev
     raise ValueError(f"unknown tool: {name}")
 
 
@@ -109,7 +128,7 @@ def _handle(msg: dict) -> dict | None:
             "protocolVersion": msg.get("params", {}).get(
                 "protocolVersion", "2024-11-05"),
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": "voltproof", "version": "0.2.0"}}}
+            "serverInfo": {"name": "voltproof", "version": "0.3.0"}}}
     if method == "ping":
         return {"jsonrpc": "2.0", "id": msg_id, "result": {}}
     if method == "tools/list":
@@ -117,9 +136,14 @@ def _handle(msg: dict) -> dict | None:
     if method == "tools/call":
         params = msg.get("params") or {}
         try:
-            text = _dispatch(params.get("name", ""), params.get("arguments") or {})
+            ev = _dispatch(params.get("name", ""), params.get("arguments") or {})
+            text = _fmt_evidence(ev)
+            structured = ev.to_dict()
+            structured.pop("waveform_b64", None)
+            structured.pop("schematic_b64", None)
             return {"jsonrpc": "2.0", "id": msg_id, "result": {
-                "content": [{"type": "text", "text": text}]}}
+                "content": [{"type": "text", "text": text}], "structuredContent":structured,
+                "isError":not ev.ok}}
         except Exception as e:
             # 工具内部失败按协议以 isError 结果返回（不是 JSON-RPC error）
             return {"jsonrpc": "2.0", "id": msg_id, "result": {

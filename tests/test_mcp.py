@@ -66,9 +66,10 @@ def main() -> int:
           "params": {"name": "verify_netlist", "arguments": {"netlist": BAD_NETLIST}}})
     r = recv()
     text = r["result"]["content"][0]["text"]
-    # 无 API Key 时修复环第一步就 LLMError → isError 结果（协议正确性即测试目标）
+    # 默认原样验证，无需 API Key；错误通过 isError 和确定性检查原因返回。
     check("MCP: verify_netlist 返回 isError 与可读原因", r.get("id") == 3
-          and r["result"].get("isError") is True and "工具调用失败" in text,
+          and r["result"].get("isError") is True and "参考地" in text
+          and r["result"].get("structuredContent", {}).get("ok") is False,
           text[:120])
 
     send({"jsonrpc": "2.0", "id": 4, "method": "no/such/method"})

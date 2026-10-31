@@ -180,11 +180,14 @@ INTERPRET_SYSTEM = """\
 """
 
 
-def interpret_user(request: str, netlist: str, metrics: dict[str, float | str]) -> str:
+def interpret_user(request: str, netlist: str, metrics: dict[str, float | str], checks=None, verdict="simulated") -> str:
     m = "\n".join(f"- {k}: {v}" for k, v in metrics.items())
     return (
         f"用户原始需求：{request}\n\n网表：\n```spice\n{netlist}\n```\n\n"
-        f"实测指标（来自仿真输出）：\n{m}"
+        f"实测指标（来自仿真输出）：\n{m}\n\n"
+        f"系统确定性判定：{verdict}；验收明细：{checks or []}\n"
+        "只能引用系统的验收结论。simulated 表示尚未设置可执行目标；incomplete 表示证据不完整。"
+        "未验证的条件必须说明未验证，不得自行宣称需求已满足。"
     )
 
 

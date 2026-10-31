@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import re
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -27,6 +28,7 @@ class Traces:
     # 电压，混用会把恒定 1.0 的 AC 源算成 ptp=0 再除出 1e14 的荒谬增益
     # （bench 实测：sensor-conditioning 假失败即此因）
     analysis: str = "unknown"
+    complex_signals: dict[str, np.ndarray] = field(default_factory=dict)
 
 
 def _infer_analysis(is_ac: bool, time_axis: np.ndarray | None) -> str:
@@ -89,6 +91,7 @@ def load_traces(raw_path: str | Path) -> Traces:
 
         time_axis: np.ndarray | None = None
         signals: dict[str, np.ndarray] = {}
+        complex_signals: dict[str, np.ndarray] = {}
         for var in data["vars"]:
             name = var["name"]
             arr_c = np.asarray(data["values"][name], dtype=complex)
@@ -97,8 +100,10 @@ def load_traces(raw_path: str | Path) -> Traces:
                 time_axis = arr
             else:
                 signals[name] = arr
+                if is_ac:
+                    complex_signals[name] = arr_c
         analysis = _infer_analysis(is_ac, time_axis)
-        tr = Traces(time=time_axis, signals=signals, analysis=analysis)
+        tr = Traces(time=time_axis, signals=signals, analysis=analysis, complex_signals=complex_signals)
         if multi_note:
             tr.warning = multi_note
         return tr
@@ -175,7 +180,8 @@ def _parse_ascii_plot(text: str) -> Traces:
         else:
             signals[name] = mag
     return Traces(time=time_axis, signals=signals,
-                  analysis=_infer_analysis(saw_complex, time_axis))
+                  analysis=_infer_analysis(saw_complex, time_axis),
+                  complex_signals={n: cols[n] for n in signals} if saw_complex else {})
 
 
 # ---------------------------------------------------------------------------
@@ -214,9 +220,9 @@ def _peak_interp(freqs: np.ndarray, amps: np.ndarray, k: int) -> float:
     return k * df
 
 
-def dominant_freq(t: np.ndarray, y: np.ndarray) -> tuple[float, float] | None:
+def dominant_freq(t: np.ndarray, y: np.ndarray, skip_fraction=0.2) -> tuple[float, float] | None:
     """主频 (f0, 基波幅度)。判据：主峰幅度 > 峰峰值 5%，否则视为非周期信号。"""
-    spec = signal_spectrum(t, y)
+    spec = signal_spectrum(t, y, skip_fraction)
     if spec is None:
         return None
     freqs, amps = spec
@@ -224,12 +230,16 @@ def dominant_freq(t: np.ndarray, y: np.ndarray) -> tuple[float, float] | None:
     vpp = float(np.ptp(y))
     if vpp <= 0 or amps[k] < 0.05 * vpp / 2:
         return None
-    return _peak_interp(freqs, amps, k), float(amps[k])
+    frequency = _peak_interp(freqs, amps, k)
+    cycles = frequency * float(t[-1] - t[0]) * (1 - skip_fraction)
+    if cycles < 3 or len(t) * (1 - skip_fraction) / max(cycles, 1) < 8:
+        return None
+    return frequency, float(amps[k])
 
 
-def thd_ratio(t: np.ndarray, y: np.ndarray, f0: float) -> float | None:
+def thd_ratio(t: np.ndarray, y: np.ndarray, f0: float, skip_fraction=0.2) -> float | None:
     """2..9 次谐波幅度平方和开方 / 基波幅度。"""
-    spec = signal_spectrum(t, y)
+    spec = signal_spectrum(t, y, skip_fraction)
     if spec is None or f0 <= 0:
         return None
     freqs, amps = spec
@@ -265,16 +275,31 @@ def extract_metrics(traces: Traces) -> dict[str, float]:
     m: dict[str, float] = {}
 
     def clean(x: float) -> float:
-        return round(float(x), 6)
+        if not np.isfinite(x):
+            raise ValueError("测量超出有限数值范围")
+        return float(f"{float(x):.9g}")
+
+    if traces.analysis == "ac":
+        for name, arr in traces.signals.items():
+            m[f"{name}_magnitude_min"] = clean(np.min(arr))
+            m[f"{name}_magnitude_max"] = clean(np.max(arr))
+            if name in traces.complex_signals:
+                phase=np.angle(traces.complex_signals[name],deg=True)
+                m[f"{name}_phase_min_deg"] = clean(np.min(phase))
+                m[f"{name}_phase_max_deg"] = clean(np.max(phase))
+        if traces.time is not None:
+            m["frequency_start_Hz"] = clean(traces.time[0])
+            m["frequency_stop_Hz"] = clean(traces.time[-1])
+        return m
 
     for name, arr in traces.signals.items():
-        key = name.lower()
-        m[f"{name}_mean"] = clean(np.mean(arr))
-        m[f"{name}_max"] = clean(np.max(arr))
-        m[f"{name}_min"] = clean(np.min(arr))
-        m[f"{name}_vpp"] = clean(np.ptp(arr))
-        m[f"{name}_rms"] = clean(np.sqrt(np.mean(arr ** 2)))
-        if traces.time is not None and len(traces.time) == len(arr):
+        t, yy = steady_window(traces, arr)
+        m[f"{name}_mean"] = clean(time_mean(t, yy))
+        m[f"{name}_max"] = clean(np.max(yy))
+        m[f"{name}_min"] = clean(np.min(yy))
+        m[f"{name}_vpp"] = clean(np.ptp(yy))
+        m[f"{name}_rms"] = clean(np.sqrt(time_mean(t, yy ** 2)))
+        if traces.analysis == "tran" and traces.time is not None and len(traces.time) == len(arr):
             dom = dominant_freq(traces.time, arr)
             if dom is not None:
                 f0, _a0 = dom
@@ -291,3 +316,163 @@ def extract_metrics(traces: Traces) -> dict[str, float]:
             m[f"ratio_{names[0]}_{names[1]}"] = clean(b_rms / a_rms)
 
     return m
+
+
+def validate_traces(traces: Traces) -> None:
+    if not traces.signals:
+        raise ValueError("波形没有可测量信号")
+    for name, values in traces.signals.items():
+        if len(values) == 0 or not np.all(np.isfinite(values)):
+            raise ValueError(f"{name} 数据为空或包含非有限值")
+        if traces.time is not None and len(values) != len(traces.time):
+            raise ValueError(f"{name} 与分析坐标长度不同")
+    if traces.time is not None:
+        if not np.all(np.isfinite(traces.time)) or np.any(np.diff(traces.time) < 0):
+            raise ValueError("分析坐标必须有限且递增")
+
+
+def save_trace_preview(traces: Traces, path: Path):
+    """交互显示用的有限采样；验收始终使用完整数据。"""
+    validate_traces(traces)
+    count = len(next(iter(traces.signals.values())))
+    indices = np.unique(np.linspace(0, count - 1, min(count, 1600), dtype=int))
+    x = traces.time if traces.time is not None else np.arange(count)
+    data = {"analysis": traces.analysis, "x": np.asarray(x)[indices].tolist(),
+            "signals": {name: np.asarray(y)[indices].tolist() for name, y in list(traces.signals.items())[:8]},
+            "phase": {name: np.angle(y[indices], deg=True).tolist() for name, y in list(traces.complex_signals.items())[:8]},
+            "note": "交互图为波形预览；验收指标使用全部原始数据计算。"}
+    path.write_text(json.dumps(data, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+
+
+def time_mean(t, y) -> float:
+    if t is None or len(t) < 2 or float(t[-1] - t[0]) <= 0:
+        return float(np.mean(y))
+    integral = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
+    return float(integral(y, t) / (t[-1] - t[0]))
+
+
+def steady_window(traces, y, skip=0.2):
+    if traces.analysis != "tran" or traces.time is None or len(y) < 2:
+        return None, np.asarray(y)
+    t = np.asarray(traces.time)
+    start = float(t[0] + (t[-1] - t[0]) * skip)
+    mask = t > start
+    tt = np.concatenate(([start], t[mask]))
+    yy = np.concatenate(([np.interp(start, t, y)], np.asarray(y)[mask]))
+    return tt, yy
+
+
+def resolve_signal(traces, node: str, exact=False):
+    if traces is None:
+        return None
+    def canonical(s):
+        return s.lower().strip().removeprefix("v(").removesuffix(")")
+    wanted = canonical(node)
+    matches = [(name, y) for name, y in traces.signals.items() if canonical(name) == wanted]
+    if not matches and not exact:
+        aliases = {"out": ("vout", "output"), "in": ("vin", "input")}
+        matches = [(name, y) for name, y in traces.signals.items() if canonical(name) in aliases.get(wanted, ())]
+    if not matches and not exact:
+        matches = [(name, y) for name, y in traces.signals.items() if wanted in canonical(name)]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _ac_input(netlist: str, node: str):
+    # 兼容旧网表只写输出的情况：仅接受直接接地、明确字面量 AC 源。
+    from .tuner import _spice_val
+    found = []
+    for line in netlist.splitlines():
+        tokens = line.split()
+        if len(tokens) < 5 or not tokens[0].lower().startswith("v"):
+            continue
+        if tokens[1].lower() != node.lower() or tokens[2] != "0":
+            continue
+        for j, token in enumerate(tokens[:-1]):
+            if token.lower() == "ac":
+                try:
+                    value = _spice_val(tokens[j + 1])
+                    if value > 0 and np.isfinite(value):
+                        found.append(value)
+                except (ValueError, KeyError):
+                    pass
+    return found[0] if len(found) == 1 else None
+
+
+def compute_metric(traces, metric, out_node="out", in_node="in", *, netlist="",
+                   exact=False, skip=0.2, filter_type="lowpass", signed=False):
+    """返回有限实测值或明确的不可测原因。所有调用共用窗口和截止点插值。"""
+    if traces is None:
+        return None, "没有可用的波形证据"
+    if metric not in ("mean", "rms", "vpp", "ripple", "freq", "gain", "fc", "thd"):
+        return None, f"尚未支持 {metric} 的确定性验收，请补充专用测量设置"
+    out = resolve_signal(traces, out_node, exact)
+    if out is None:
+        return None, f"输出节点 {out_node} 缺失或不唯一，请明确选择节点并写入 raw"
+    name, y = out
+    t, yy = steady_window(traces, y, skip)
+    if not len(yy) or not np.all(np.isfinite(yy)):
+        return None, "波形数据为空或无效"
+    if metric in ("mean", "rms", "vpp", "ripple"):
+        if traces.analysis == "ac":
+            return None, "电压统计和纹波需要工作点或瞬态分析，不能对扫频幅值计算"
+        if metric == "ripple" and traces.analysis != "tran":
+            return None, "纹波需要稳态瞬态波形"
+        if metric in ("vpp", "ripple"):
+            return float(np.ptp(yy)), ""
+        value = time_mean(t, yy if metric == "mean" else yy ** 2)
+        return (float(np.sqrt(max(value, 0))) if metric == "rms" else value), ""
+    if metric in ("freq", "thd"):
+        if traces.analysis != "tran":
+            return None, "主频/失真需要瞬态波形"
+        dom = dominant_freq(traces.time, y, skip)
+        if dom is None:
+            return None, "观测时长不足或没有可测周期信号"
+        value = dom[0] if metric == "freq" else thd_ratio(traces.time, y, dom[0], skip)
+        return (None, "无法计算失真") if value is None else (float(value) * (100 if metric == "thd" else 1), "")
+    incoming = resolve_signal(traces, in_node, exact)
+    if traces.analysis == "ac":
+        yi = incoming[1] if incoming else _ac_input(netlist, in_node)
+        if yi is None:
+            return None, f"缺少输入 {in_node}，无法计算传递函数"
+        with np.errstate(divide="ignore", invalid="ignore"):
+            transfer = np.asarray(y) / np.asarray(yi)
+        if not np.all(np.isfinite(transfer)):
+            return None, "输入幅值为零或传递函数无效"
+        n = max(2, min(5, len(transfer) // 10))
+        passband = transfer[-n:] if filter_type == "highpass" else transfer[:n]
+        reference = float(np.median(passband))
+        if metric == "gain":
+            if signed:
+                cy = traces.complex_signals.get(name)
+                ci = traces.complex_signals.get(incoming[0]) if incoming else None
+                if cy is None or ci is None:
+                    return None, "有符号增益需要输入与输出的相位数据"
+                ratio = cy / ci
+                return float(np.median(ratio[:n].real)), ""
+            return reference, ""
+        if traces.time is None or reference <= 0 or len(transfer) < 3:
+            return None, "扫频范围不足以确定通带和截止点"
+        if float(np.max(passband) - np.min(passband)) > reference * .05:
+            return None, "扫频尚未覆盖平坦通带，请扩大频率范围"
+        threshold = reference / np.sqrt(2)
+        delta = transfer - threshold
+        crossings = np.where((delta[:-1] >= 0) & (delta[1:] < 0))[0] if filter_type == "lowpass" else np.where((delta[:-1] < 0) & (delta[1:] >= 0))[0]
+        if len(crossings) != 1:
+            return None, "扫频范围没有唯一的 −3 dB 交点，请调整范围或选择滤波类型"
+        k = int(crossings[0])
+        f = np.asarray(traces.time)
+        if f[k] <= 0 or f[k + 1] <= f[k]:
+            return None, "频率坐标无效"
+        weight = (threshold - transfer[k]) / (transfer[k + 1] - transfer[k])
+        return float(np.exp(np.log(f[k]) + weight * np.log(f[k + 1] / f[k]))), ""
+    if metric == "fc":
+        return None, "截止频率需要 AC 扫描数据"
+    if incoming is None:
+        return None, f"缺少输入节点 {in_node}"
+    _ti, yin = steady_window(traces, incoming[1], skip)
+    if np.ptp(yin) < 1e-12:
+        return None, "输入恒定，无法测量交流增益"
+    value = float(np.ptp(yy) / np.ptp(yin))
+    if signed and np.cov(yin, yy)[0, 1] < 0:
+        value = -value
+    return value, ""

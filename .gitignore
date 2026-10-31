@@ -36,3 +36,7 @@ dist/
 
 # pip 构建残留
 *.egg-info/
+build/
+.test-results/
+bench/runs/
+pcb/runs/

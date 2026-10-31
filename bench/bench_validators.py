@@ -153,6 +153,11 @@ def v_square_osc(ev, tr):
         return [_ck("方波频率", False, "无输出信号")]
     from app.measure import dominant_freq
     t, y = s
+    vpp = float(np.ptp(y))
+    if vpp > 100.0:
+        return [{"name":"输出幅度在电源轨内", "ok":False,
+                 "detail":f"vpp={vpp:.3g}V，先限制运放/受控源输出摆幅，再测量周期",
+                 "tune_hint":{"kind":"clamp","message":"输出超出电源轨：E 源用 min/max 钳位"}}]
     dom = dominant_freq(t, y)
     if dom is None:
         # 未起振是结构性问题，不是数值差多少——回喂可执行的结构修复指导
@@ -169,7 +174,6 @@ def v_square_osc(ev, tr):
             },
         }]
     f0 = dom[0]
-    vpp = float(np.ptp(y))
     checks = []
     if vpp > 100.0:
         # 理想受控源没接电源轨——幅度上天（实测见过 2.8e10V），此时频率
@@ -231,20 +235,17 @@ VALIDATORS = {
 # 手写验收器优先（square-osc 的 startup/clamp 闭环修复等特殊逻辑不可声明化）。
 # ---------------------------------------------------------------------------
 
-def _spec_metric(tr, spec: dict) -> dict:
-    from app.whatif import compute_metric
+def _spec_metric(tr, spec: dict, netlist="") -> dict:
+    from app import specs as product_specs
 
     metric = spec.get("metric", "")
     target = float(spec.get("target", 0))
     tol = float(spec.get("tol", 0.15))
     name = spec.get("name") or f"{metric}≈{target:g}(±{tol:.0%})"
-    val, err = compute_metric(tr, metric, spec.get("out", "out"), spec.get("in", "in"))
-    if val is None:
-        return _ck(name, False, f"{err}（信号需写进 raw，见 write 命令）")
-    ok = _near(val, target, tol)
-    ck = _ck(name, ok, f"实测 {val:.4g}（目标 {target:g} ±{tol:.0%}）")
+    ck = product_specs.evaluate(tr, product_specs.normalize([{**spec, "tol": tol, "name": name}]), netlist)[0]
+    val, ok = ck["measured"], ck["ok"]
     # vpp/freq 类差距可触发确定性数值调参（与手写验收器同一闭环）
-    if not ok and metric in ("vpp", "freq"):
+    if not ok and val is not None and metric in ("vpp", "freq"):
         ck["tune_hint"] = {"kind": metric, "measured": val, "target": target,
                            "freq": val if metric == "freq" else float(spec.get("freq", 0))}
     return ck
@@ -256,7 +257,7 @@ def spec_validators(task: dict) -> list:
         return []
 
     def v(ev, tr):
-        return [_spec_metric(tr, s) for s in specs]
+        return [_spec_metric(tr, s, getattr(ev, "netlist", "")) for s in specs]
     return [v]
 
 

@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
-from . import checks, llm, measure, prompts
+from . import checks, llm, measure, prompts, specs, project
 from .ngspice_runner import run_netlist
 from .render_schematic import render_schematic
 from .render_wave import render_wave
@@ -54,6 +54,16 @@ class Evidence:
     elapsed: float = 0.0
     rejected: bool = False  # 领域守卫前置拒绝（与仿真失败区分）
     source: str = ""  # 产生来源：chat（对话线程）/ draw-sim（画板直仿）/ draw-ai（AI 画图轮）
+    requirements: list[dict] = field(default_factory=list)
+    verdict: str = "failed"  # passed / simulated / incomplete / failed / cancelled / explained
+    validation: dict = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+    provenance: dict = field(default_factory=dict)
+    version_id: str = ""
+    action: str = "design"
+    changes: str = ""
+    from_cache: bool = False
+    comparison: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -72,6 +82,11 @@ class Evidence:
             "checks": self.checks,
             "elapsed": round(self.elapsed, 1),
             "source": self.source,
+            "requirements": self.requirements, "verdict": self.verdict,
+            "validation": self.validation, "warnings": self.warnings,
+            "provenance": self.provenance, "version_id": self.version_id,
+            "action": self.action, "changes": self.changes, "from_cache": self.from_cache,
+            "comparison": self.comparison,
         }
 
 
@@ -116,11 +131,15 @@ def run_pipeline(request: str, previous_netlist: str | None = None,
                  validators: list[Validator] | None = None,
                  backend: str = "spice",
                  initial_netlist: str | None = None,
-                 workspace: Workspace | None = None) -> Evidence:
+                 workspace: Workspace | None = None, *,
+                 requirements: list[dict] | None = None, allow_repair: bool = True,
+                 cancelled=None, time_budget: float = 600, include_interpretation=True) -> Evidence:
     """同步包装：消费事件生成器，返回最终证据（bench/tests/CLI/MCP 用）。
     参数语义见 iter_pipeline_events。"""
     gen = iter_pipeline_events(request, previous_netlist, max_retries,
-                               validators, backend, initial_netlist, workspace)
+                               validators, backend, initial_netlist, workspace,
+                               requirements=requirements, allow_repair=allow_repair,
+                               cancelled=cancelled, time_budget=time_budget, include_interpretation=include_interpretation)
     try:
         while True:
             next(gen)
@@ -134,7 +153,9 @@ def iter_pipeline_events(request: str, previous_netlist: str | None = None,
                          backend: str = "spice",
                          initial_netlist: str | None = None,
                          workspace: Workspace | None = None,
-                         source: str = ""):
+                         source: str = "", *, requirements: list[dict] | None = None,
+                         allow_repair: bool = True, cancelled=None, time_budget: float = 600,
+                         include_interpretation=True):
     """生成器版本：修复环每前进一步 yield 一个事件（/chat/stream SSE 推送用），
     跑完 return Evidence。
 
@@ -150,6 +171,15 @@ def iter_pipeline_events(request: str, previous_netlist: str | None = None,
     from . import cache as _cache
 
     ws = workspace or default_workspace()
+    external_validators = validators is not None
+    requirements = specs.normalize(requirements) if requirements is not None else (
+        [] if external_validators else specs.extract(request))
+    validators = list(validators or [])
+    max_retries = max(0, min(int(max_retries), 12)) if allow_repair else 0
+    started = time.monotonic()
+
+    def interrupted():
+        return (cancelled is not None and cancelled()) or time.monotonic() - started > time_budget
 
     guard = _domain_guard(request)
     if guard is not None:
@@ -159,8 +189,10 @@ def iter_pipeline_events(request: str, previous_netlist: str | None = None,
         return guard
 
     # 结果缓存：相同请求（无验收器）直接返回完整证据——演示防翻车
-    if validators is None and initial_netlist is None:
-        cached = _cache.get(request, previous_netlist, backend, cache_dir=ws.cache_dir)
+    cache_context = {"requirements": requirements, "policy": specs.VERSION, "repair": allow_repair,
+                     "interpretation":include_interpretation}
+    if not external_validators and initial_netlist is None and not interrupted():
+        cached = _cache.get(request, previous_netlist, backend, cache_dir=ws.cache_dir, context=cache_context)
         if cached is not None:
             ev = Evidence(**{k: v for k, v in cached.items()
                              if k in Evidence.__dataclass_fields__ and k != "elapsed"})
@@ -174,8 +206,19 @@ def iter_pipeline_events(request: str, previous_netlist: str | None = None,
     sim_dir = ws.task_sim_dir(task_id)
     doc_dir = ws.task_docs_dir(task_id)
     ev = Evidence(request=request, task_id=task_id, task_dir=str(doc_dir),
-                  source=source or "chat")
+                  source=source or "chat", requirements=requirements,
+                  provenance={"created": time.strftime("%Y-%m-%d %H:%M:%S"),
+                              "model": llm._MODEL, "measurement_version": specs.VERSION,
+                              "window": "瞬态按时间去除前20%暂态，平均/RMS按时间积分",
+                              "simulator": "ngspice", "backend": backend})
     t0 = time.monotonic()
+    if interrupted():
+        ev.verdict = "cancelled"
+        return ev
+    contract = ""
+    if requirements:
+        contract = "\n\n固定验收条件（不可修改目标；write 必须包含明确的输入输出节点）：\n" + json.dumps(requirements, ensure_ascii=False)
+        yield {"type": "stage", "round": 0, "stage": "requirements", "problems": [], "requirements": requirements}
 
     if initial_netlist:
         netlist = initial_netlist
@@ -184,13 +227,14 @@ def iter_pipeline_events(request: str, previous_netlist: str | None = None,
     elif backend == "skidl":
         netlist = yield from _skidl_track_events(request, ev)
     else:
+        yield {"type": "stage", "round": 0, "stage": "generate", "state":"running", "problems": [], "note": "正在生成网表"}
         netlist = llm.extract_code_block(
-            llm.chat(prompts.GENERATE_SYSTEM, prompts.generate_user(request, previous_netlist))
+            llm.chat(prompts.GENERATE_SYSTEM, prompts.generate_user(request + contract, previous_netlist))
         )
         if not netlist:
             # 推理型模型偶发空响应——重生成一次，别让空网表直接终止管线
             netlist = llm.extract_code_block(
-                llm.chat(prompts.GENERATE_SYSTEM, prompts.generate_user(request, previous_netlist))
+                llm.chat(prompts.GENERATE_SYSTEM, prompts.generate_user(request + contract, previous_netlist))
             )
         ev.retry_log.append({"round": 0, "stage": "generate", "problems": []})
         yield {"type": "stage", "round": 0, "stage": "generate", "problems": []}
@@ -199,8 +243,17 @@ def iter_pipeline_events(request: str, previous_netlist: str | None = None,
     numeric_tunes = 0             # 数值调参次数上限：线性近似不成立时及时回退 LLM
     llm_fix_fails = 0             # 连续 LLM 修复失败次数：≥2 时重启换架构（跳出局部解）
     for rnd in range(max_retries + 1):
+        if interrupted():
+            ev.verdict = "cancelled"
+            ev.warnings.append("任务已取消或达到总耗时预算；没有应用电路变更")
+            break
         if not netlist:  # skidl 轨构建彻底失败（日志已在 _skidl_track_events 里）
             break
+        ev.netlist = netlist
+        ev.metrics = {}
+        ev.checks = []
+        ev.waveform_b64 = None
+        ev.validation = {"static": "pending", "simulation": "pending", "measurement": "pending", "requirements": "pending"}
         # ---- 修复环重启：同一网表连续修不好，说明架构有问题，重新设计 ----
         if llm_fix_fails >= 2:
             ev.retry_log.append({"round": rnd, "stage": "regenerate",
@@ -209,7 +262,7 @@ def iter_pipeline_events(request: str, previous_netlist: str | None = None,
                    "problems": ["连续修复失败，换一种电路架构重新生成"]}
             netlist = llm.extract_code_block(
                 llm.chat(prompts.GENERATE_SYSTEM,
-                         prompts.generate_user(request, previous_netlist),
+                         prompts.generate_user(request + contract, previous_netlist),
                          temperature=0.5, thinking=False)
             )
             # 换架构重启要快且求多样：官方文档明确思考模式下 temperature 被静默
@@ -218,6 +271,7 @@ def iter_pipeline_events(request: str, previous_netlist: str | None = None,
             continue
         # ---- 静态检查 ----
         chk = checks.run_checks(netlist)
+        ev.validation["static"] = "passed" if chk.ok else "failed"
         if not chk.ok:
             ev.retry_log.append({"round": rnd, "stage": "static-check", "problems": chk.errors})
             yield {"type": "stage", "round": rnd, "stage": "static-check", "problems": chk.errors}
@@ -228,7 +282,20 @@ def iter_pipeline_events(request: str, previous_netlist: str | None = None,
             continue
 
         # ---- 仿真 ----
-        sim = run_netlist(netlist, workdir=sim_dir)
+        yield {"type": "stage", "round": rnd, "stage": "simulate", "state":"running", "problems": [], "note": "正在运行 ngspice"}
+        round_dir = sim_dir / f"round-{rnd + 1}"
+        simulation_netlist, verification_plan = specs.ac_verification_netlist(netlist, requirements)
+        if verification_plan:
+            round_dir.mkdir(parents=True, exist_ok=True)
+            (round_dir / "source.cir").write_text(netlist, encoding="utf-8")
+            ev.provenance["source_netlist_hash"] = project.digest(netlist)
+            netlist = ev.netlist = simulation_netlist
+        sim = run_netlist(simulation_netlist, workdir=round_dir)
+        ev.provenance["verification_plan"] = verification_plan
+        ev.provenance["simulated_netlist_hash"] = project.digest(simulation_netlist)
+        ev.provenance["netlist_hash"] = project.digest(netlist)
+        ev.provenance["raw_file"] = str(Path("sim") / task_id / round_dir.name / "out.raw")
+        ev.validation["simulation"] = "passed" if sim.ok else "failed"
         if not sim.ok:
             probs = [sim.error_snippet or "仿真失败且无报错文本"]
             ev.retry_log.append({"round": rnd, "stage": "simulate", "problems": probs})
@@ -249,32 +316,46 @@ def iter_pipeline_events(request: str, previous_netlist: str | None = None,
             netlist = _repair(netlist, probs)
             continue
 
+        yield {"type":"stage", "round":rnd, "stage":"simulate", "problems":[]}
         # ---- 成功：解析、测指标、出图（修复环计数归零）----
         llm_fix_fails = 0
         tr = None
         try:
             tr = measure.load_traces(sim.raw_path)
+            measure.validate_traces(tr)
             if tr.warning:
                 ev.retry_log.append({"round": rnd, "stage": "measure",
                                      "problems": [tr.warning]})  # 非致命，留痕
             ev.metrics = measure.extract_metrics(tr)
+            measure.save_trace_preview(tr, doc_dir / "wave.json")
+            ev.validation["measurement"] = "passed"
+        except Exception as e:
+            ev.validation["measurement"] = "failed"
+            ev.verdict = "incomplete"
+            ev.retry_log.append({"round": rnd, "stage": "measure", "problems": [f"波形解析失败: {e}"]})
+            break
+        try:
             png = render_wave(tr, doc_dir / "wave.png", title=request[:40])
             ev.waveform_b64 = _b64_png(png)
-        except Exception as e:  # 波形解析失败不致命，证据卡降级
-            ev.retry_log.append({"round": rnd, "stage": "measure", "problems": [f"波形解析失败: {e}"]})
+        except Exception as e:
+            ev.warnings.append(f"波形图片生成失败，原始数据仍可复核：{e}")
 
         # ---- 验收环：实测指标 vs 需求（"仿真跑通"≠"实验达标"，
         # 差距必须回喂 LLM 调参重跑）----
-        if validators:
-            vchecks: list[dict] = []
+        if validators or requirements:
+            vchecks: list[dict] = specs.evaluate(tr, requirements, netlist)
             for v in validators:
                 vchecks.extend(v(ev, tr))
             ev.checks = vchecks
+            (round_dir / "checks.json").write_text(json.dumps(vchecks, ensure_ascii=False, indent=1), encoding="utf-8")
+            ev.validation["requirements"] = "incomplete" if any(c.get("ok") is None for c in vchecks) else (
+                "passed" if all(c.get("ok") for c in vchecks) else "failed")
             fails = [c for c in vchecks if not c.get("ok")]
             if fails:
+                ev.verdict = "incomplete" if any(c.get("ok") is None for c in fails) else "failed"
                 problems = [f"{c.get('name', '检查项')}未达标：{c.get('detail', '')}" for c in fails]
                 ev.retry_log.append({"round": rnd, "stage": "verify", "problems": problems})
-                if rnd == max_retries:
+                if rnd == max_retries or any(c.get("ok") is None for c in fails):
                     yield {"type": "stage", "round": rnd, "stage": "verify", "problems": problems}
                     break
                 # 优先程序化数值调参（确定性收敛）：判分层输出的 tune_hint
@@ -293,7 +374,7 @@ def iter_pipeline_events(request: str, previous_netlist: str | None = None,
                            "problems": problems, "note": f"数值调参：{note}"}
                 else:
                     tune_history.append(f"第 {rnd + 1} 轮实测未达标：" + "；".join(problems)[:400])
-                    netlist = _tune(request, netlist, problems, history=tune_history)
+                    netlist = _tune(request + contract, netlist, problems, history=tune_history)
                     yield {"type": "stage", "round": rnd, "stage": "verify",
                            "problems": problems, "note": "回喂差距，LLM 调参重跑"}
                 continue
@@ -301,12 +382,23 @@ def iter_pipeline_events(request: str, previous_netlist: str | None = None,
         # ---- 全部通过：解读、电路图 ----
         ev.netlist = netlist
         ev.ok = True
-        yield {"type": "stage", "round": rnd, "stage": "interpret", "problems": []}
-        ev.interpretation = llm.chat(
-            prompts.INTERPRET_SYSTEM,
-            prompts.interpret_user(request, netlist, ev.metrics or {"提示": "未解析到波形数据"}),
-            thinking=False,  # 轻量总结任务：关思考省下分钟级等待（官方支持按调用关闭）
-        )
+        ev.verdict = "passed" if ev.checks else "simulated"
+        if not ev.checks:
+            ev.validation["requirements"] = "not_requested"
+        if interrupted():
+            ev.ok = False
+            ev.verdict = "cancelled"
+            break
+        if include_interpretation:
+            yield {"type": "stage", "round": rnd, "stage": "interpret", "problems": []}
+            try:
+                ev.interpretation = llm.chat(
+                    prompts.INTERPRET_SYSTEM,
+                    prompts.interpret_user(request, netlist, ev.metrics, ev.checks, ev.verdict),
+                    thinking=False,
+                )
+            except Exception as e:
+                ev.warnings.append(f"AI 解读暂时不可用，仿真证据已保留：{type(e).__name__}")
 
         # 电路原理图：优先确定性自动布局（网表→graphviz 坐标→按位渲染），
         # 失败才回退 LLM 生成 schemdraw 代码的老路
@@ -316,10 +408,7 @@ def iter_pipeline_events(request: str, previous_netlist: str | None = None,
             png = render_netlist_schematic(netlist, doc_dir / "schematic.png",
                                            title=request[:24])
             if png is None:
-                code = llm.extract_code_block(
-                    llm.chat(prompts.SCHEMATIC_SYSTEM, prompts.schematic_user(netlist))
-                )
-                png = render_schematic(code, doc_dir / "schematic.png")
+                ev.warnings.append("该电路暂时不能自动绘图；请按完整网表复核连接")
             if png:
                 ev.schematic_b64 = _b64_png(png)
         except Exception:
@@ -327,10 +416,19 @@ def iter_pipeline_events(request: str, previous_netlist: str | None = None,
         break
 
     ev.elapsed = time.monotonic() - t0
+    if interrupted():
+        ev.ok = False
+        ev.verdict = "cancelled"
     ev.netlist = ev.netlist or netlist  # 失败时也保留最后版本，便于诊断
-    if ev.ok and validators is None and initial_netlist is None:
+    from .ngspice_runner import simulator_info
+    ev.provenance.update(simulator=simulator_info(), max_retries=max_retries,
+        first_attempt_passed=bool(ev.ok and not any(r.get("problems") and r.get("stage") in
+            ("static-check", "simulate", "verify", "skidl-build") for r in ev.retry_log)),
+        model_definitions_hash=project.digest("\n".join(line for line in (ev.netlist or "").splitlines()
+            if re.match(r"\s*\.(model|subckt|include|lib)\b", line, re.I))))
+    if ev.ok and not external_validators and initial_netlist is None:
         _cache.put(request, previous_netlist, backend, ev.to_dict(),
-                   cache_dir=ws.cache_dir)
+                   cache_dir=ws.cache_dir, context=cache_context)
     _write_evidence_file(ev, doc_dir)
     return ev
 
@@ -504,55 +602,132 @@ def restore_conversation(conversation_id: str,
 
 def chat_with_conversation_events(conversation_id: str | None, message: str,
                                   attachment: dict | None = None,
-                                  workspace: Workspace | None = None):
+                                  workspace: Workspace | None = None, *,
+                                  requirements: list[dict] | None = None, expected_revision=None,
+                                  cancelled=None, time_budget=600):
     """生成器版本：逐个 yield 管线事件，最后 yield {"type": "done", **响应}。
     响应 dict 与同步版 chat_with_conversation 完全一致（含 conversation_id）。"""
     ws = workspace or default_workspace()
     c = get_conversation(conversation_id, workspace=ws)
     message = message[:8000]  # 正文限长（防内存滥用）
-    initial_netlist = None
+    proj = ws.load_project()
+    base_revision = project.revision(proj)
+    if expected_revision is not None and expected_revision != base_revision:
+        yield {"type": "error", "error": "项目已更新，请重新载入后发送"}
+        return
+    attached_netlist = None
     if attachment and attachment.get("content"):
         if len(attachment["content"]) > 256 * 1024:
             yield {"type": "error", "error": "附件超过 256KB 限制"}
             return
         if _looks_like_netlist(attachment.get("filename", ""), attachment["content"]):
-            initial_netlist = attachment["content"]
+            attached_netlist = attachment["content"]
         else:
             message = f"{message}\n\n[附件 {attachment.get('filename', '')} 的内容]\n{attachment['content'][:4000]}"
-    gen = iter_pipeline_events(message, previous_netlist=initial_netlist or ws.load_project().get("netlist"),
-                               initial_netlist=initial_netlist, workspace=ws, source="chat")
-    ev = None
-    while True:
+    current_netlist = attached_netlist or project.active_netlist(proj)
+    if proj.get("dirty") and not current_netlist and (proj.get("canvas") or {}).get("comps"):
+        yield {"type":"error", "error":"当前画布尚未生成可用网表，请先仿真或从画布发送 AI 修改"}
+        return
+    action = specs.classify(message, bool(current_netlist), bool(attached_netlist))
+    inherited = proj.get("requirements", []) if action != "design" or proj.get("requirements_pending") else []
+    last_evidence = _load_archived_evidence(ws, proj.get("evidence_id", "")) if proj.get("evidence_id") else None
+    if last_evidence and last_evidence.get("provenance", {}).get("netlist_hash") != project.digest(current_netlist or ""):
+        last_evidence = None
+    requirements = specs.normalize(requirements) if requirements is not None else specs.extract(
+        message, inherited, (last_evidence or {}).get("checks"))
+    yield {"type": "stage", "round": 0, "stage": "intent", "problems": [], "action": action}
+    if action == "compare":
+        ev=Evidence(request=message, source="chat",action=action,verdict="explained",task_id=ws.new_task_id())
+        current=project.read_version(ws, proj["version_id"]) if proj.get("version_id") else None
+        if current and current.get("parent"):
+            ev.comparison=project.compare(ws,current["parent"],current["id"])
+            ev.changes=ev.comparison["changes"]
+            ev.interpretation=ev.comparison["note"]
+        else:
+            ev.interpretation="还没有两个已采用的电路版本。先完成一次修改，再比较前后方案。"
+    elif action == "explain":
+        ev = Evidence(request=message, netlist=current_netlist, source="chat", action=action,
+                      verdict="explained", requirements=requirements,
+                      task_id=ws.new_task_id(), provenance={"netlist_hash": project.digest(current_netlist or "")})
+        if current_netlist:
+            ev.metrics = (last_evidence or {}).get("metrics", {})
+            ev.checks = (last_evidence or {}).get("checks", [])
+            if not ev.metrics:
+                ev.warnings.append("当前电路没有绑定的仿真证据；以下只解释结构，数值表现尚未验证")
+            yield {"type": "stage", "round": 0, "stage": "interpret", "problems": []}
+            ev.interpretation = llm.chat(prompts.INTERPRET_SYSTEM,
+                prompts.interpret_user(message, current_netlist, ev.metrics, ev.checks,
+                                       (last_evidence or {}).get("verdict", "incomplete")), thinking=False)
+        else:
+            ev.interpretation = "当前项目没有电路。请先绘制电路或上传网表，再进行解释。"
+    else:
+        initial_netlist = current_netlist if action in ("verify", "diagnose") else None
+        # 网表决定当前工程事实；历史只提供用户先前的约束与讨论背景。
+        history = "\n".join(m.get("text", "")[:700] for m in c.get("messages", [])[-8:] if m.get("role") == "user")
+        prompt_message = message + ("\n\n之前的需求背景（当前网表优先）：\n" + history if history else "")
+        gen = iter_pipeline_events(prompt_message, previous_netlist=current_netlist,
+                                   initial_netlist=initial_netlist, workspace=ws, source="chat",
+                                   requirements=requirements, allow_repair=action != "verify",
+                                   cancelled=cancelled, time_budget=time_budget)
+        while True:
+            try:
+                yield next(gen)
+            except StopIteration as s:
+                ev = s.value
+                break
+        ev.request = message
+        ev.action = action
+    if cancelled and cancelled():
+        ev.ok = False
+        ev.verdict = "cancelled"
+    canvas_synced = False
+    candidate_id = ""
+    applied = False
+    if ev.ok and action != "explain":
+        import difflib
+        ev.changes = "\n".join(difflib.unified_diff((current_netlist or "").splitlines(),
+                                                  ev.netlist.splitlines(), fromfile="之前", tofile="候选", lineterm=""))
         try:
-            yield next(gen)
-        except StopIteration as s:
-            ev = s.value
-            break
-    if ev.ok:
-        # 项目制：电路上下文在项目级（所有线程共用），不再写会话
-        _proj = ws.load_project()
-        _proj["netlist"] = ev.netlist  # 只有验证通过的电路才进入项目上下文
-        _proj["updated"] = _now()
-        ws.save_project(_proj)
-    c["messages"].append({"role": "user", "text": message, "ts": _now(),
-                          "attachment": attachment and attachment.get("filename")})
-    c["messages"].append(_assistant_entry(ev))
-    if not c.get("title"):
-        c["title"] = message.strip().replace("\n", " ")[:36]
-    c["updated"] = _now()
-    _save_conversations(ws, c)
+            from .canvas_layout import netlist_to_canvas
+            _cv = netlist_to_canvas(ev.netlist)
+        except Exception:
+            _cv = None
+        candidate = project.candidate(ws, ev.to_dict(), _cv, base_revision)
+        candidate_id = ev.version_id = candidate["id"]
+        if action != "diagnose":
+            try:
+                project.apply(ws, candidate_id)
+                applied = True
+                canvas_synced = True  # 空画布也需刷新，防止旧图代表新网表
+            except project.Conflict as e:
+                ev.warnings.append(str(e))
+    if ev.task_id and not ev.from_cache:
+        _write_evidence_file(ev, ws.task_docs_dir(ev.task_id))
+    with project.lock(ws):
+        c["messages"].append({"role": "user", "text": message, "ts": _now(),
+                              "attachment": attachment and attachment.get("filename")})
+        c["messages"].append(_assistant_entry(ev))
+        if not c.get("title"):
+            c["title"] = message.strip().replace("\n", " ")[:36]
+        c["updated"] = _now()
+        _save_conversations(ws, c)
     d = ev.to_dict()
     d["conversation_id"] = c["id"]  # 空入参时客户端也能拿到新建的对话 id
+    d["canvas_synced"] = canvas_synced
+    d["candidate_id"] = candidate_id
+    d["applied"] = applied
+    d["base_revision"] = base_revision
+    d["project_revision"] = project.revision(ws.load_project())
     yield {"type": "done", **d}
 
 
 def chat_with_conversation(conversation_id: str | None, message: str,
                            attachment: dict | None = None,
-                           workspace: Workspace | None = None) -> dict:
+                           workspace: Workspace | None = None, **kwargs) -> dict:
     """同步版（/chat、测试与外部调用用）：消费事件流返回最终响应。"""
     d: dict = {}
     for ev in chat_with_conversation_events(conversation_id, message,
-                                            attachment, workspace):
+                                            attachment, workspace, **kwargs):
         if ev.get("type") == "done":
             d = {k: v for k, v in ev.items() if k != "type"}
         elif ev.get("type") == "error":

@@ -92,6 +92,7 @@
     {
      "name": "-3dB 截止≈1kHz(±30%)",
      "metric": "fc",
+     "filter_type": "highpass",
      "target": 1000,
      "tol": 0.3,
      "out": "out"

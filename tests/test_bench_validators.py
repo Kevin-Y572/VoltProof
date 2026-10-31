@@ -148,7 +148,7 @@ R1 out 0 1.59k
 .control
 set filetype=ascii
 ac dec 20 10 100k
-write out.raw v(out)
+write out.raw v(out) v(in)
 .endc
 .end
 """,

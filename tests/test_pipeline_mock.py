@@ -156,7 +156,7 @@ def main() -> int:
 
     # ---- 3. 仿真失败（无 raw）→ 自动修复 ----
     with patch.object(llm, "chat", Scripted([NO_CONTROL, GOOD, "解读：修复后通过。"])):
-        ev = pipeline.run_pipeline("1kHz低通滤波器-仿真修复用例")
+        ev = pipeline.run_pipeline("RC电路-仿真输出修复用例")
     check("仿真修复: ok", ev.ok, str(ev.retry_log))
     stages = [r["stage"] for r in ev.retry_log]
     check("仿真修复: 记录了 simulate 轮", "simulate" in stages, str(stages))
@@ -177,10 +177,11 @@ def main() -> int:
     with patch.object(llm, "chat", s1):
         d1 = pipeline.chat_with_conversation("conv-test", "先做1kHz低通")
     check("对话: 第一轮返回 conversation_id", d1["conversation_id"] == "conv-test")
-    s2 = Scripted([GOOD.replace("1.59k", "8k").replace("100n", "20n"), "第二轮解读。"])
+    s2 = Scripted([GOOD.replace("1.59k", "800").replace("100n", "20n"), "第二轮解读。"])
     with patch.object(llm, "chat", s2):
         d2 = pipeline.chat_with_conversation("conv-test", "把截止频率改到10kHz重选参数")
     gen_user2 = s2.calls[0][1]
+    check("对话: 第二轮真正满足 10kHz 目标", d2["verdict"] == "passed" and d2["checks"][0]["ok"])
     check("对话: 第二轮携带上轮网表", "当前网表" in gen_user2 and "V1 in 0" in gen_user2, gen_user2[:100])
     check("对话: 消息流四条（两轮问答）", len(conv("conv-test")["messages"]) == 4)
     check("对话: 状态按对话分文件落盘（重启可恢复）",

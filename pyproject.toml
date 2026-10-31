@@ -38,7 +38,8 @@ voltproof = "app.cli:main"
 voltproof-mcp = "app.mcp_server:main"
 
 [tool.setuptools]
-packages = ["app"]
+packages = ["app", "app.pcb"]
 
 [tool.setuptools.package-data]
-app = ["static/*.html"]
+app = ["static/*.html", "static/*.js", "static/*.css"]
+"app.pcb" = ["part_catalog/*.json", "tests_data/*.json"]
