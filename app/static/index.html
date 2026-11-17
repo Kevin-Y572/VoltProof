@@ -694,6 +694,8 @@ document.getElementById('wfRunBtn').addEventListener('click', async () => {
     if (!r.ok || d.error) throw new Error(d.error || '扫描失败');
     whatifDialog.style.display = 'none';
     addMsg('assistant', renderWhatif(d));
+    if (window.VPBoard) window.VPBoard.reloadRounds();
+    if (window.refreshWorkspaceInfo) window.refreshWorkspaceInfo();
   } catch (e) {
     wfMsg.style.color = 'var(--warn)'; wfMsg.textContent = String(e.message || e);
   }

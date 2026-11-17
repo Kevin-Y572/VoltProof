@@ -1082,7 +1082,7 @@ async function restoreRounds() {
     const d = await (await fetch("/api/ws/tasks")).json();
     const fromTasks = (d.tasks || []).slice(0, 30).map(t => {
       const src = t.source || "chat";
-      const kind = src === "draw-sim" ? "sim" : (src === "draw-ai" ? "ai" : "chat");
+      const kind = src === "draw-sim" || src === "whatif" || src === "whatif-point" ? "sim" : (src === "draw-ai" ? "ai" : "chat");
       const text = (t.request || "").replace(/^画板仿真：/, "");
       return { kind, text: text || "(无标题)", ok: !!t.ok };
     });

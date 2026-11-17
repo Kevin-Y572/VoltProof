@@ -501,7 +501,6 @@ def whatif_run(req: WhatifReq):
                                workdir=ws.task_sim_dir(tid), requirements=p.get("requirements", []))
         if d.get("error"):
             return JSONResponse(status_code=400, content=d)
-        from .canvas_layout import netlist_to_canvas
         for i, point in enumerate(d.get("points", [])):
             if not point.get("ok") or point.get("passed") is False:
                 continue
@@ -514,7 +513,11 @@ def whatif_run(req: WhatifReq):
                 validation={"static":"passed", "simulation":"passed", "measurement":"passed", "requirements":"passed" if point.get("checks") else "not_requested"},
                 provenance={"netlist_hash":project.digest(nl), "measurement_version":specs.VERSION,
                             "base_version":p.get("version_id"), "raw_file":str(Path("sim") / tid / f"point-{i + 1}" / "out.raw")})
-            v = project.candidate(ws, ev.to_dict(), netlist_to_canvas(nl), project.revision(p))
+            canvas = whatif.canvas_with_component_value(p.get("canvas"), req.component, point["value"])
+            if canvas is None:
+                from .canvas_layout import netlist_to_canvas
+                canvas = netlist_to_canvas(nl)
+            v = project.candidate(ws, ev.to_dict(), canvas, project.revision(p))
             ev.version_id = v["id"]
             pipeline._write_evidence_file(ev, ws.task_docs_dir(point_id))
             from . import measure
@@ -524,6 +527,9 @@ def whatif_run(req: WhatifReq):
             point["candidate_id"] = v["id"]
         d["recommended_index"] = next((i for i, point in enumerate(d.get("points", [])) if point.get("passed") is True), None)
         d.update(version_id=p.get("version_id"), base_revision=project.revision(p), source="whatif", task_id=tid)
+        scan_ev = pipeline.Evidence(ok=True, request=f"参数扫描 {req.component} × {d.get('metric_name') or req.metric}",
+                                    source="whatif", task_id=tid, netlist=netlist, verdict="simulated")
+        pipeline._write_evidence_file(scan_ev, ws.task_docs_dir(tid))
         f = ws.task_docs_dir(tid) / "scan.json"
         f.write_text(json.dumps({k: v for k, v in d.items() if k != "png_b64"}, ensure_ascii=False, indent=1), encoding="utf-8")
         plot = ws.task_sim_dir(tid) / "whatif.png"

@@ -78,6 +78,7 @@ window.VPProof = (() => {
     if (!r.ok) throw new Error(d.error || "应用失败");
     await window.VPBoard?.reloadProject();
     await window.VPBoard?.reloadRounds();
+    if (window.refreshWorkspaceInfo) window.refreshWorkspaceInfo();
   }
   document.addEventListener("click", async e => {
     const wave=e.target.closest("[data-wave-preview]");

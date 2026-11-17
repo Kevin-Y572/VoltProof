@@ -105,9 +105,20 @@ def verify_drawn(netlist: str, title: str, workspace, *, requirements=None, expe
     except Exception as e:
         result["warnings"].append(f"波形图片生成失败：{e}")
     result["checks"] = specs.evaluate(tr, requirements, netlist)
-    if any(not c.get("ok") for c in result["checks"]):
-        result["verdict"] = "incomplete" if any(c.get("ok") is None for c in result["checks"]) else "failed"
-        return _fail("verify", [c["detail"] for c in result["checks"] if not c.get("ok")], "目标尚未达标", "按验收明细调整电路后重新仿真")
+    failed_checks = [c for c in result["checks"] if not c.get("ok")]
+    if failed_checks:
+        # 仿真已经完成。未达标也要留下可比较的版本，并作为当前电路，不能停在「尚未验证」。
+        result["verdict"] = "incomplete" if any(c.get("ok") is None for c in failed_checks) else "failed"
+        result["validation"]["requirements"] = result["verdict"]
+        result["stage"] = "verify"
+        result["errors"] = [c["detail"] for c in failed_checks]
+        result["error"] = "目标尚未达标"
+        result["hint"] = "按验收明细调整电路后重新仿真"
+    else:
+        result["ok"] = True
+        result["verdict"] = "passed" if result["checks"] else "simulated"
+        result["validation"]["requirements"] = "passed" if result["checks"] else "not_requested"
+        result["stage"] = "done"
     try:
         from .schematic_layout import render_netlist_schematic
         result["schematic_b64"] = _b64_png(
@@ -115,13 +126,10 @@ def verify_drawn(netlist: str, title: str, workspace, *, requirements=None, expe
     except Exception:
         pass  # 原理图是加分项，用户画布本身就是图
 
-    result["ok"] = True
     from .ngspice_runner import simulator_info
     result["provenance"]["simulator"] = simulator_info()
-    result["verdict"] = "passed" if result["checks"] else "simulated"
-    result["validation"]["requirements"] = "passed" if result["checks"] else "not_requested"
-    result["stage"] = "done"
     result["elapsed"] = round(time.monotonic() - t0, 2)
+    result["snapshot"] = True
     if canvas is None:
         from .canvas_layout import netlist_to_canvas
         canvas = netlist_to_canvas(netlist)

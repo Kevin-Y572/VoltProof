@@ -450,6 +450,12 @@ if (clearsDirty({ applied: false, sameCircuit: true })) throw new Error("unappli
         self.assertIn(".proof-dialog", css)
         self.assertIn("margin:auto", css.replace(" ", ""))
         self.assertNotIn("min-width:1000px", css)
+        self.assertIn("#simBtn", css)
+        self.assertIn("min-width:7.6em", css.replace(" ", ""))
+        pcb_js = (root / "app" / "static" / "pcb.js").read_text(encoding="utf-8")
+        self.assertIn("auto_ports", pcb_js)
+        self.assertIn("renderJobDone", pcb_js)
+        self.assertNotIn("ev.state +", pcb_js)
         page = (root / "app" / "static" / "index.html").read_text(encoding="utf-8")
         self.assertIn("head-tools", page)
         self.assertIn("refreshWorkspaceInfo", page)
@@ -468,6 +474,84 @@ if (clearsDirty({ applied: false, sameCircuit: true })) throw new Error("unappli
             self.assertIn("head-tools", client.get("/").text)
             self.assertEqual(client.get("/draw.html").status_code, 200)
             self.assertEqual(client.get("/compare.html").status_code, 200)
+
+    def test_failed_acceptance_is_saved_and_current(self):
+        goal = specs.normalize([{"metric": "mean", "target": 5, "tol": 0.05, "out": "out"}])
+        passed = draw_api.verify_drawn(DIV, "达标", self.ws, requirements=goal)
+        self.assertTrue(passed["ok"], passed.get("errors") or passed.get("error"))
+        missed = DIV.replace("R1 in out 1k", "R1 in out 3k")
+        canvas = {"comps": [{"name": "R1", "type": "R", "x": 4, "y": 6, "rot": 0, "value": "3k"},
+                            {"name": "GND", "type": "GND", "x": 2, "y": 12, "rot": 0, "value": ""},
+                            {"name": "GND", "type": "GND", "x": 8, "y": 12, "rot": 0, "value": ""}],
+                  "wires": [], "labels": [{"text": "out", "x": 4, "y": 6}]}
+        failed = draw_api.verify_drawn(missed, "未达标", self.ws, requirements=goal, canvas=canvas)
+        self.assertFalse(failed["ok"])
+        self.assertEqual(failed["verdict"], "failed")
+        self.assertTrue(failed["applied"])
+        self.assertTrue(failed["version_id"])
+        project_now = self.ws.load_project()
+        self.assertFalse(project_now["dirty"])
+        self.assertEqual(project_now["version_id"], failed["version_id"])
+        self.assertIn("3k", project_now["netlist"])
+        saved = project.read_version(self.ws, failed["version_id"])
+        self.assertEqual(saved["verdict"], "failed")
+        self.assertEqual(saved["canvas"]["comps"][0]["x"], 4)
+        ids = [v["id"] for v in project.list_versions(self.ws)]
+        self.assertIn(passed["version_id"], ids)
+        self.assertIn(failed["version_id"], ids)
+
+    def test_whatif_keeps_hand_layout_and_scan_is_a_task(self):
+        drawn = {"comps": [
+            {"name": "V1", "type": "VDC", "x": 4, "y": 8, "rot": 0, "value": "DC 10"},
+            {"name": "R1", "type": "R", "x": 14, "y": 3, "rot": 0, "value": "1k"},
+            {"name": "R2", "type": "R", "x": 14, "y": 16, "rot": 1, "value": "1k"},
+            {"name": "GND", "type": "GND", "x": 4, "y": 18, "rot": 0, "value": ""},
+            {"name": "GND", "type": "GND", "x": 16, "y": 18, "rot": 0, "value": ""},
+        ], "wires": [{"pts": [[4, 8], [14, 3]]}], "labels": [{"text": "out", "x": 14, "y": 8}]}
+        kept = whatif.canvas_with_component_value(drawn, "R1", "9.7k")
+        self.assertEqual(kept["comps"][1]["value"], "9.7k")
+        self.assertEqual(kept["comps"][1]["x"], 14)
+        self.assertEqual(sum(c["type"] == "GND" for c in kept["comps"]), 2)
+        self.assertEqual(kept["labels"][0]["text"], "out")
+        self.assertIsNone(whatif.canvas_with_component_value(drawn, "R9", "1"))
+        self.seed()
+        project_now = self.ws.load_project()
+        project_now["canvas"] = drawn
+        self.ws.save_project(project_now)
+        from fastapi.testclient import TestClient
+        from app import main
+        with patch.object(main, "_active_ws", self.ws), TestClient(main.app) as client:
+            rev = client.get("/api/project").json()["revision"]
+            scan = client.post("/api/whatif", json={"component": "R1", "values": ["2k"], "metric": "mean",
+                                                    "expected_revision": rev}).json()
+        point = scan["points"][0]
+        self.assertTrue(point.get("candidate_id"), scan)
+        saved = project.read_version(self.ws, point["candidate_id"])
+        self.assertEqual(saved["canvas"]["comps"][1]["value"], "2k")
+        self.assertEqual(saved["canvas"]["comps"][1]["x"], 14)
+        self.assertEqual(sum(c["type"] == "GND" for c in saved["canvas"]["comps"]), 2)
+        tasks = self.ws.list_tasks()
+        scan_task = next(t for t in tasks if t.get("source") == "whatif")
+        self.assertTrue(scan_task["ok"])
+        self.assertIn("参数扫描", scan_task["request"])
+
+    def test_pcb_first_preflight_uses_auto_ports(self):
+        from fastapi.testclient import TestClient
+        from app import main
+        self.ws.ensure()
+        project_now = self.ws.load_project()
+        project_now.update(netlist="RC deck\nVin in 0 SIN(0 1 1k)\nR1 in out 1.59k\nC1 out 0 100n\n.end",
+                           netlist_hash="h", dirty=False)
+        self.ws.save_project(project_now)
+        with patch.object(main, "_active_ws", self.ws), TestClient(main.app) as client:
+            blocked = client.post("/api/pcb/preflight", json={"use_project": True, "ports": []})
+            self.assertEqual(blocked.status_code, 200)
+            self.assertTrue(any("外部端子" in b["reason"] for b in blocked.json()["blockers"]))
+            opened = client.post("/api/pcb/preflight", json={"use_project": True, "auto_ports": True})
+        self.assertEqual(opened.status_code, 200, opened.text[:300])
+        body = opened.json()
+        self.assertFalse(any("外部端子" in b["reason"] for b in body["blockers"]), body["blockers"])
+        self.assertEqual(body["port_candidates"], ["in"])
 
 
 if __name__ == "__main__":

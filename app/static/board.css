@@ -3,10 +3,11 @@
 :root { --bg:#0f1117; --card:#181b24; --line:#2a2f3d; --text:#e6e8ee; --dim:#9aa1b2; --acc:#4f8cff; --ok:#3fb96f; --warn:#e6a23c; --err:#e05555; --wire:#8fa3c8; }
 * { box-sizing:border-box; margin:0; padding:0; }
 body { background:var(--bg); color:var(--text); font:14px/1.6 "Segoe UI",system-ui,-apple-system,"Microsoft YaHei",sans-serif; height:100vh; display:flex; flex-direction:column; overflow:hidden; }
-header { padding:10px 16px; border-bottom:1px solid var(--line); display:flex; align-items:flex-start; gap:10px; flex-wrap:wrap; }
-header:has(.head-tools) { flex-wrap:nowrap; }
+header { padding:10px 16px; border-bottom:1px solid var(--line); display:flex; align-items:flex-start; gap:10px; flex-wrap:wrap; background:var(--bg); flex-shrink:0; position:relative; z-index:5; }
+header:has(.head-tools) { flex-wrap:nowrap; align-items:center; }
 .head-main { display:flex; flex:1 1 auto; flex-wrap:wrap; align-items:center; gap:8px; min-width:0; }
-.head-tools { display:flex; flex:0 0 auto; align-items:center; gap:8px; margin-left:12px; align-self:center; }
+.head-tools { display:flex; flex:0 0 auto; flex-wrap:nowrap; align-items:center; gap:8px; margin-left:12px; background:var(--bg); }
+#simBtn { min-width:7.6em; text-align:center; flex:none; }
 header h1 { font-size:16px; }
 header a { color:var(--dim); font-size:12.5px; text-decoration:none; }
 header a:hover { color:var(--acc); }

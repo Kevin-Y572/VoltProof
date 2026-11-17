@@ -11,6 +11,7 @@
   let pollTimer = null;
   let pre = null;           // 最近一次 preflight 结果
   let selectedPorts = new Set();
+  let portsTouched = false;
   let lastVersionId = null; // 最近完成任务产出的候选（预览用）
 
   // —— 页签可见性（首次进入才拉数据）——
@@ -59,7 +60,10 @@
     out.textContent = '预检中…';
     $('pcbRunBtn').disabled = true;
     try {
-      pre = await api('/api/pcb/preflight', { use_project: true, ports: [...selectedPorts] });
+      const body = { use_project: true };
+      if (portsTouched) body.ports = [...selectedPorts];
+      else body.auto_ports = true;
+      pre = await api('/api/pcb/preflight', body);
       const roles = pre.elements.map(e =>
         `<span class="badge">${e.ref}·${e.kind}→${e.role === 'device' ? '器件' : e.role === 'stimulus' ? '激励' : '⛔阻断'}</span>`).join('');
       let html = '<div>' + roles + '</div>';
@@ -91,6 +95,7 @@
     box.innerHTML = allNets.map(p =>
       `<span class="pport${selectedPorts.has(p) ? ' on' : ''}" data-p="${p}">${p}${selectedPorts.has(p) ? ' ⟶ 端子' : ''}</span>`).join('') || '';
     box.querySelectorAll('.pport').forEach(el => el.addEventListener('click', () => {
+      portsTouched = true;
       const p = el.dataset.p;
       if (selectedPorts.has(p)) selectedPorts.delete(p);
       else selectedPorts.add(p);
@@ -119,6 +124,20 @@
         `${s.ok === true ? '✓' : s.ok === false ? '✗' : '…'}</span><span>${s.stage || s.type}${s.detail ? '：' + s.detail : ''}</span></div>`
       ).join('');
     };
+    const escJob = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const renderJobDone = (ev) => {
+      const blockers = Array.isArray(ev.blockers) ? ev.blockers : [];
+      const hints = Array.isArray(ev.tool_hints) ? ev.tool_hints : [];
+      const failed = ev.ok !== true || blockers.length > 0;
+      const seconds = ev.elapsed_s != null ? '，' + ev.elapsed_s + ' 秒' : '';
+      render({ stage: failed ? '失败' : '完成', ok: !failed,
+               detail: (failed ? '未完成' : '已完成') + seconds });
+      const lines = blockers.map(b => typeof b === 'string' ? b : ((b.ref ? b.ref + '：' : '') + (b.reason || ''))).concat(hints);
+      if (failed && lines.some(Boolean)) {
+        $('pcbJobOut').insertAdjacentHTML('beforeend', lines.filter(Boolean).map(t =>
+          `<div class="pcbstage"><span class="no">✗</span><span>${escJob(t)}</span></div>`).join(''));
+      }
+    };
     let es = null;
     try {
       es = new EventSource('/api/pcb/jobs/' + jid + '/events');
@@ -129,7 +148,7 @@
         if (ev.type === 'done') {
           es.close(); es = null;
           $('pcbCancelBtn').style.display = 'none';
-          render({ stage: '完成', ok: ev.ok, detail: ev.state + (ev.elapsed_s != null ? '，' + ev.elapsed_s + 's' : '') });
+          renderJobDone(ev);
           onDone(ev);
         } else if (ev.type === 'error') {
           es.close(); es = null;
@@ -151,6 +170,7 @@
           if (st.done) {
             clearInterval(pollTimer); pollTimer = null;
             $('pcbCancelBtn').style.display = 'none';
+            renderJobDone(st);
             onDone(st);
           }
         } catch (e) { /* 网络抖动继续轮询 */ }
