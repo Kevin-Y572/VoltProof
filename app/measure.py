@@ -448,7 +448,8 @@ def compute_metric(traces, metric, out_node="out", in_node="in", *, netlist="",
                 if cy is None or ci is None:
                     return None, "有符号增益需要输入与输出的相位数据"
                 ratio = cy / ci
-                return float(np.median(ratio[:n].real)), ""
+                band = ratio[-n:] if filter_type == "highpass" else ratio[:n]
+                return float(np.median(band.real)), ""
             return reference, ""
         if traces.time is None or reference <= 0 or len(transfer) < 3:
             return None, "扫频范围不足以确定通带和截止点"

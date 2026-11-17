@@ -311,6 +311,113 @@ class ProductTest(unittest.TestCase):
         self.assertEqual(r.json()["metrics"]["v(out)_mean"],5)
         self.assertEqual(self.ws.load_project()["netlist"],DIV)
 
+    def test_filter_type_ignores_negation_and_contrast(self):
+        cases = {
+            "截止频率1kHz，电路不要做成高通": "lowpass",
+            "截止频率1kHz的低通，并对比高通方案": "lowpass",
+            "设计高通滤波器，截止频率1kHz": "highpass",
+            "做一个1kHz高通": "highpass",
+            "做一个1kHz低通": "lowpass",
+        }
+        for text, expected in cases.items():
+            found = [s for s in specs.extract(text) if s["metric"] == "fc"]
+            self.assertEqual(len(found), 1, text)
+            self.assertEqual(found[0]["filter_type"], expected, text)
+            self.assertEqual(found[0]["target"], 1000, text)
+
+    def test_signed_highpass_gain_uses_passband(self):
+        import numpy as np
+        f = np.logspace(1, 5, 40)
+        fc = 1000.0
+        high = -2 * (1j * f / fc) / (1 + 1j * f / fc)
+        tr = measure.Traces(time=f, signals={"v(out)": np.abs(high), "v(in)": np.ones_like(f)},
+                            analysis="ac", complex_signals={"v(out)": high, "v(in)": np.ones_like(f) + 0j})
+        signed, err = measure.compute_metric(tr, "gain", filter_type="highpass", signed=True)
+        unsigned, _ = measure.compute_metric(tr, "gain", filter_type="highpass", signed=False)
+        self.assertEqual(err, "")
+        self.assertAlmostEqual(unsigned, 2, delta=0.05)
+        self.assertAlmostEqual(signed, -2, delta=0.05)
+        low = -2 / (1 + 1j * f / fc)
+        tr_lp = measure.Traces(time=f, signals={"v(out)": np.abs(low), "v(in)": np.ones_like(f)},
+                               analysis="ac", complex_signals={"v(out)": low, "v(in)": np.ones_like(f) + 0j})
+        signed_lp, err_lp = measure.compute_metric(tr_lp, "gain", filter_type="lowpass", signed=True)
+        self.assertEqual(err_lp, "")
+        self.assertAlmostEqual(signed_lp, -2, delta=0.05)
+
+    def test_nonliteral_component_stays_unverified(self):
+        spec = {"metric": "component_value", "component": "R1", "target": 0, "tol": 0,
+                "name": "R1 参数", "unit": "Ω"}
+        missing = specs.evaluate(None, specs.normalize([spec]), "R1 in out {1k}\n")
+        self.assertIsNone(missing[0]["ok"])
+        self.assertEqual(missing[0]["status"], "unverified")
+        self.assertIsNone(missing[0]["measured"])
+        literal_zero = specs.evaluate(None, specs.normalize([spec]), "R1 in out 0\n")
+        self.assertTrue(literal_zero[0]["ok"])
+        self.assertEqual(literal_zero[0]["measured"], 0)
+        literal = specs.evaluate(None, specs.normalize([{**spec, "target": 1000}]), "R1 in out 1k\n")
+        self.assertTrue(literal[0]["ok"])
+        self.assertEqual(literal[0]["measured"], 1000)
+
+    def test_requirement_editor_round_trip(self):
+        import subprocess
+        proof = Path(__file__).resolve().parent.parent / "app" / "static" / "proof.js"
+        script = r"""
+const fs = require("fs");
+const vm = require("vm");
+const context = { console, document: { addEventListener() {} } };
+context.window = context;
+vm.createContext(context);
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), context);
+const fn = context.VPProof.requirementFromEditor;
+const component = fn({
+  metric: "component_value", op: "near", target: 1000, tol: 0,
+  out: "out", in: "in", filter_type: "lowpass",
+  component: "R1", unit: "Ω", name: "R1 参数",
+});
+if (component.metric !== "component_value" || component.component !== "R1"
+    || component.target !== 1000 || component.unit !== "Ω" || component.name !== "R1 参数") {
+  throw new Error("component round-trip " + JSON.stringify(component));
+}
+const preserved = fn({ preserve: { metric: "带宽", target: 0, name: "带宽", unit: "" } });
+if (preserved.metric !== "带宽") throw new Error("unknown metric became " + preserved.metric);
+let rejected = false;
+try { fn({ metric: "", target: 1000, tol: 0.05, op: "near" }); }
+catch (e) { rejected = /指标/.test(e.message); }
+if (!rejected) throw new Error("blank metric was accepted");
+rejected = false;
+try { fn({ metric: "not-a-metric", target: 1, tol: 0.05, op: "near" }); }
+catch (e) { rejected = /指标/.test(e.message); }
+if (!rejected) throw new Error("unknown metric was accepted as fc");
+"""
+        proc = subprocess.run(["node", "-e", script, str(proof)], text=True, capture_output=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+
+    def test_compare_demo_does_not_replace_project(self):
+        from fastapi.testclient import TestClient
+        from app import main
+        self.seed()
+        before = self.ws.load_project()
+        net_before = before["netlist"]
+        revision = project.revision(before)
+        versions = set(p.name for p in (self.ws.root / ".cp" / "versions").glob("*.json"))
+        with patch.object(main, "_active_ws", self.ws), patch.object(llm, "chat", side_effect=self.llm_for(RC)), TestClient(main.app) as client:
+            page = client.get("/compare.html")
+            self.assertEqual(page.status_code, 200)
+            self.assertIn("/demo/verified", page.text)
+            self.assertNotIn("fetch('/chat'", page.text)
+            result = client.post("/demo/verified", json={"message": "设计截止频率1kHz的低通"})
+        self.assertEqual(result.status_code, 200, result.text[:500])
+        body = result.json()
+        self.assertTrue(body.get("ok"), body.get("retry_log") or body)
+        self.assertFalse(body.get("applied"))
+        self.assertTrue(body.get("demo"))
+        self.assertIn("没有替换当前项目电路", body.get("note", ""))
+        after = self.ws.load_project()
+        self.assertEqual(after.get("netlist"), net_before)
+        self.assertEqual(project.revision(after), revision)
+        self.assertEqual(set(p.name for p in (self.ws.root / ".cp" / "versions").glob("*.json")), versions)
+        self.assertEqual(list(self.ws.convs_dir.glob("*.json")), [])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
