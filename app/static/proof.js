@@ -3,6 +3,17 @@ window.VPProof = (() => {
   const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const labels = {passed:"✓ 指标达标", simulated:"仿真完成 · 尚未设置验收目标", incomplete:"验证不完整", failed:"未通过验证", cancelled:"任务已取消", explained:"电路解读"};
   const metrics = {fc:"截止频率", gain:"增益", ripple:"纹波", mean:"输出电压", vpp:"峰峰值", freq:"主频", rms:"有效值", thd:"总谐波失真", component_value:"元件参数"};
+  function resultClass(input) {
+    const errors = (input && input.errors) || [];
+    const watching = !!(input && (input.panelActive || input.armed || input.hasVerified));
+    if (!watching) return "idle";
+    if (errors.length) return "blocked";
+    if (input.hasVerified && input.stamp === input.verifiedStamp) return "fresh";
+    return "stale";
+  }
+  function clearsDirty(input) {
+    return !!(input && input.applied && input.sameCircuit);
+  }
   function requirementFromEditor(input) {
     if (input && input.preserve) {
       const spec = input.preserve;
@@ -87,7 +98,7 @@ window.VPProof = (() => {
   });
   function showWave(button,data) {
     const box=document.createElement("section");box.className="proof-wave";
-    box.innerHTML=`<div class="hints">${esc(data.note)} · 横轴 ${data.analysis==='ac'?'频率 Hz（对数）':data.analysis==='tran'?'时间 s':'样本'}</div><div data-signals></div><canvas height="240" style="width:100%;height:240px"></canvas><div data-cursor class="hints">移动鼠标读取波形；拖动下方范围查看局部。</div><label>起点 <input data-start type="range" min="0" max="98" value="0"></label><label>终点 <input data-end type="range" min="1" max="100" value="100"></label>${Object.keys(data.phase || {}).length ? '<label>纵轴 <select data-axis><option value="signals">幅值</option><option value="phase">节点相位 °</option></select></label>':''}`;
+    box.innerHTML=`<div class="hints">${esc(data.note)} · 横轴 ${data.analysis==='ac'?'频率 Hz（对数）':data.analysis==='tran'?'时间 s':'样本'}</div><div data-signals></div><div data-cursor class="hints">移动鼠标读取波形；拖动下方范围查看局部。</div><canvas height="240"></canvas><label>起点 <input data-start type="range" min="0" max="98" value="0"></label><label>终点 <input data-end type="range" min="1" max="100" value="100"></label>${Object.keys(data.phase || {}).length ? '<label>纵轴 <select data-axis><option value="signals">幅值</option><option value="phase">节点相位 °</option></select></label>':''}`;
     button.after(box);button.hidden=true;
     const names=Object.keys(data.signals),palette=['#4f8cff','#e6a23c','#3fb96f','#e05555','#c391ef','#70d6d8'];
     box.querySelector('[data-signals]').innerHTML=names.map((n,i)=>`<label style="color:${palette[i%palette.length]};margin-right:8px"><input type="checkbox" data-signal="${i}" checked> ${esc(n)}</label>`).join('');
@@ -169,5 +180,5 @@ window.VPProof = (() => {
     };
     document.body.append(dlg); dlg.showModal();
   }
-  return {esc, label, checks, details, comparison, compareVersions, applyVersion, editRequirements, requirementFromEditor};
+  return {esc, label, checks, details, comparison, compareVersions, applyVersion, editRequirements, requirementFromEditor, resultClass, clearsDirty};
 })();

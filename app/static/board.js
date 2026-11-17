@@ -67,6 +67,8 @@ function projectPayload() {
 }
 function updateProjectState() {
   stateBadge.textContent = projectMessage || `${projectVersion ? "版本 " + projectVersion.slice(0,8) : "草稿"} · ${projectDirty ? "已修改，尚未验证" : "已保存"}`;
+  const note = document.getElementById("dirtyNote");
+  if (note) note.hidden = !projectDirty;
 }
 function save() {
   if (!projectLoaded) return;
@@ -495,9 +497,10 @@ function render(withProps = true) {
     st = `<span class="k">画布为空：从左侧选择元件开始画电路，或在下方让 AI 画一个电路。</span>`;
   if (preview)
     st = `<span class="k">🤖 AI 电路预览中——点上方「✓ 应用到画布」替换画布，或「✗ 丢弃」保留原图（Esc = 丢弃）</span>`;
-  $("status").innerHTML = st;
-  if (projectDirty) $("status").innerHTML += '<br><span class="w">画布有修改，尚未重新验证；扫描和项目解读需先仿真。</span>';
+  $("status").innerHTML = st + '<span id="dirtyNote" class="w"><br>画布有修改，尚未重新验证；扫描和项目解读需先仿真。</span>';
+  updateProjectState();
   if (withProps) renderProps(pre);
+  syncResultPanel(pre);
   save();
 }
 
@@ -755,18 +758,68 @@ function loadDemo() {
 // ---------------------------------------------------------------------------
 // 仿真 + 结果
 // ---------------------------------------------------------------------------
+let verifiedHTML = "", verifiedStamp = "", verifiedOK = false, resultMode = "idle", blockedKey = "", resultArmed = false;
+
+function circuitStamp() {
+  return JSON.stringify({comps, wires, labels,
+    analysis:$("analysis").value, tstop:$("tstop").value, fstart:$("fstart").value, fstop:$("fstop").value});
+}
+function blockedHtml(errors) {
+  return `<div class="evidence"><div class="verdict fail">✗ 还不能仿真：先修掉连线错误</div>
+      <div class="errbox">${errors.map(esc).join("<br>")}</div></div>`;
+}
+function staleHtml() {
+  return `<div class="evidence"><div class="verdict">电路已变化，请重新仿真</div>
+      <div class="hints">当前连线检查已通过。上次仿真结果不再对应当前画布。</div></div>`;
+}
+function syncResultPanel(pre) {
+  pre = pre || precheck();
+  const panel = $("resultPanel");
+  const panelActive = panel.style.display !== "none" && !!panel.innerHTML;
+  const mode = VPProof.resultClass({
+    errors: pre.errors, stamp: circuitStamp(), verifiedStamp,
+    hasVerified: !!verifiedHTML, panelActive, armed: resultArmed,
+  });
+  const errKey = pre.errors.join("\n");
+  if (mode === "fresh" && resultMode === "fresh") return;
+  if (mode === "blocked" && resultMode === "blocked" && blockedKey === errKey) return;
+  if (mode === "stale" && resultMode === "stale") return;
+  if (mode === "idle") return;
+  resultMode = mode;
+  panel.style.display = "block";
+  if (mode === "blocked") {
+    blockedKey = errKey;
+    panel.innerHTML = blockedHtml(pre.errors);
+    $("aiBtn").disabled = true;
+    return;
+  }
+  if (mode === "fresh") {
+    blockedKey = "";
+    panel.innerHTML = verifiedHTML;
+    const ai2 = $("aiBtn2");
+    if (ai2) ai2.onclick = runInterpret;
+    $("aiBtn").disabled = !verifiedOK;
+    return;
+  }
+  blockedKey = "";
+  panel.innerHTML = staleHtml();
+  $("aiBtn").disabled = true;
+}
+
 $("simBtn").onclick = async () => {
   const pre = precheck();
   if (pre.errors.length) {
-    $("resultPanel").style.display = "block";
-    $("resultPanel").innerHTML = `<div class="evidence"><div class="verdict fail">✗ 还不能仿真：先修掉连线错误</div>
-      <div class="errbox">${pre.errors.map(esc).join("<br>")}</div></div>`;
+    resultArmed = true;
+    resultMode = "idle";
+    syncResultPanel(pre);
     return;
   }
   const nl = buildNetlist();
   $("simBtn").disabled = true; $("simBtn").textContent = "仿真中…";
   try {
     await flushProject();
+    const stampAtRequest = circuitStamp();
+    const payloadAtRequest = JSON.stringify(projectPayload());
     const r = await fetch("/api/draw/verify", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title: $("title").value || "未命名电路", netlist: nl,
@@ -774,10 +827,17 @@ $("simBtn").onclick = async () => {
                              expected_revision:projectRevision, canvas:{comps,wires,labels} }),
     });
     const d = await r.json();
-    if (d.applied) { projectRevision=d.project_revision; projectVersion=d.version_id; projectDirty=false; updateProjectState(); }
-    renderResult(d);
+    if (VPProof.clearsDirty({applied: !!d.applied, sameCircuit: circuitStamp() === stampAtRequest})) {
+      projectRevision=d.project_revision; projectVersion=d.version_id; projectDirty=false;
+      lastSavedPayload=payloadAtRequest; projectMessage="";
+    }
+    updateProjectState();
+    renderResult(d, stampAtRequest);
     addRound("sim", $("title").value || "未命名电路", !!d.ok);
+    if (window.refreshWorkspaceInfo) window.refreshWorkspaceInfo();
   } catch (err) {
+    verifiedHTML = "";
+    resultMode = "idle";
     $("resultPanel").style.display = "block";
     $("resultPanel").innerHTML = `<div class="evidence"><div class="verdict fail">✗ 请求失败：${esc(String(err))}</div></div>`;
   } finally {
@@ -785,17 +845,21 @@ $("simBtn").onclick = async () => {
   }
 };
 
-function renderResult(d) {
+function renderResult(d, stamp) {
   const panel = $("resultPanel");
-  panel.style.display = "block";
-  if (d.error && !d.stage) { panel.innerHTML = `<div class="evidence"><div class="verdict fail">✗ ${esc(d.error)}</div></div>`; return; }
+  if (d.error && !d.stage) {
+    verifiedHTML = ""; verifiedStamp = ""; resultMode = "idle";
+    panel.style.display = "block";
+    panel.innerHTML = `<div class="evidence"><div class="verdict fail">✗ ${esc(d.error)}</div></div>`;
+    return;
+  }
   const ok = !!d.ok;
   lastResultTask=d.task_id || "";
   $("aiBtn").disabled = !ok;
   const chips = Object.entries(d.metrics || {}).slice(0, 14)
     .map(([k, v]) => `<span class="metric">${esc(k)} = <b>${typeof v === "number" ? (+v.toPrecision(4)) : esc(v)}</b></span>`).join("");
   const stageName = { safety: "安全检查", checks: "电路检查", simulate: "ngspice 仿真" }[d.stage] || d.stage;
-  panel.innerHTML = `<div class="evidence">
+  verifiedHTML = `<div class="evidence">
     <div class="verdict ${d.verdict === "passed" ? "ok" : ""}">${VPProof.label(d)}　<span style="color:var(--dim);font-weight:400;font-size:12px">${d.analysis ? "分析类型：" + ({ op: "直流工作点", tran: "瞬态", ac: "交流扫描" }[d.analysis] || d.analysis) + " · " : ""}耗时 ${d.elapsed ?? "–"}s</span></div>
     ${VPProof.checks(d)}${VPProof.details({...d, candidate_id:undefined})}
     ${d.errors && d.errors.length ? `<div class="errbox">${d.errors.map(esc).join("<br>")}${d.hint ? `<br><span class="h">↳ ${esc(d.hint)}</span>` : ""}</div>` : ""}
@@ -810,8 +874,10 @@ function renderResult(d) {
     <details><summary>网表（ngspice，可直接复现）</summary><pre>${esc(d.netlist || "")}</pre></details>
     ${d.task_id ? `<div class="hints" style="margin-top:6px">任务档案：${esc(d.task_id)}</div>` : ""}
   </div>`;
-  const ai2 = $("aiBtn2");
-  if (ai2) ai2.onclick = runInterpret;
+  verifiedStamp = stamp || circuitStamp();
+  verifiedOK = !!d.ok;
+  resultMode = "idle";
+  syncResultPanel();
   panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
@@ -972,6 +1038,7 @@ function discardPreview() {
 }
 
 function clearResult() {
+  verifiedHTML=""; verifiedStamp=""; verifiedOK=false; resultMode="idle"; blockedKey=""; resultArmed=false;
   $("resultPanel").innerHTML="";
   $("resultPanel").style.display="none";
   lastResultTask="";

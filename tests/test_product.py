@@ -418,6 +418,57 @@ if (!rejected) throw new Error("unknown metric was accepted as fc");
         self.assertEqual(set(p.name for p in (self.ws.root / ".cp" / "versions").glob("*.json")), versions)
         self.assertEqual(list(self.ws.convs_dir.glob("*.json")), [])
 
+    def test_result_panel_follows_wiring_and_verify(self):
+        import subprocess
+        proof = Path(__file__).resolve().parent.parent / "app" / "static" / "proof.js"
+        script = r"""
+const fs = require("fs");
+const vm = require("vm");
+const context = { console, document: { addEventListener() {} } };
+context.window = context;
+vm.createContext(context);
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), context);
+const { resultClass, clearsDirty } = context.VPProof;
+const fresh = { errors: [], stamp: "a", verifiedStamp: "a", hasVerified: true, panelActive: true, armed: true };
+if (resultClass(fresh) !== "fresh") throw new Error("verified circuit should stay fresh");
+if (resultClass({ ...fresh, errors: ["C1 floating"] }) !== "blocked") throw new Error("wiring error should replace the old plot");
+if (resultClass({ errors: [], stamp: "b", verifiedStamp: "a", hasVerified: true, panelActive: true }) !== "stale") throw new Error("edited circuit should be stale");
+if (resultClass({ errors: [], stamp: "b", verifiedStamp: "", hasVerified: false, panelActive: true, armed: true }) !== "stale") throw new Error("fixed wiring should clear the old block");
+if (resultClass({ errors: ["float"], stamp: "b", verifiedStamp: "", hasVerified: false, panelActive: false, armed: false }) !== "idle") throw new Error("drawing should not open the result pane");
+if (!clearsDirty({ applied: true, sameCircuit: true })) throw new Error("successful verify should clear dirty");
+if (clearsDirty({ applied: true, sameCircuit: false })) throw new Error("edit during verify should stay dirty");
+if (clearsDirty({ applied: false, sameCircuit: true })) throw new Error("unapplied verify should stay dirty");
+"""
+        proc = subprocess.run(["node", "-e", script, str(proof)], text=True, capture_output=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+
+    def test_workbench_static_layout_and_favicon(self):
+        from fastapi.testclient import TestClient
+        from app import main
+        root = Path(__file__).resolve().parent.parent
+        css = (root / "app" / "static" / "board.css").read_text(encoding="utf-8")
+        self.assertIn(".proof-dialog", css)
+        self.assertIn("margin:auto", css.replace(" ", ""))
+        self.assertNotIn("min-width:1000px", css)
+        page = (root / "app" / "static" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("head-tools", page)
+        self.assertIn("refreshWorkspaceInfo", page)
+        self.assertIn("wsInput.value = currentWsRoot", page)
+        self.assertIn('rel="icon"', page)
+        proof = (root / "app" / "static" / "proof.js").read_text(encoding="utf-8")
+        cursor = proof.split("data-cursor", 1)[0]
+        self.assertLess(proof.find("data-cursor"), proof.find("<canvas"))
+        for name in ("draw.html", "compare.html"):
+            text = (root / "app" / "static" / name).read_text(encoding="utf-8")
+            self.assertIn('rel="icon"', text, name)
+        with TestClient(main.app) as client:
+            icon = client.get("/favicon.ico")
+            self.assertEqual(icon.status_code, 200, icon.text[:120])
+            self.assertGreater(len(icon.content), 100)
+            self.assertIn("head-tools", client.get("/").text)
+            self.assertEqual(client.get("/draw.html").status_code, 200)
+            self.assertEqual(client.get("/compare.html").status_code, 200)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
