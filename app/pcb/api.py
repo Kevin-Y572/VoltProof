@@ -110,12 +110,16 @@ def preflight(req: dict):
     netlist = _project_netlist(req)
     if isinstance(netlist, JSONResponse):
         return netlist
-    ports = req.get("ports") or []
+    ir = netlist_to_ir(netlist)
+    # 第一次预检还没有用户勾选。auto_ports 与界面「激励源网络已自动勾选」同一口径。
+    if req.get("auto_ports") and not req.get("ports"):
+        ports = list(ir.get("port_candidates") or [])
+    else:
+        ports = req.get("ports") or []
     if not isinstance(ports, list) or len(ports) > 16:
         return JSONResponse(status_code=400, content={"error": "ports 须为 ≤16 项数组"})
     ports = [str(p)[:40] for p in ports]
     caps = capabilities()
-    ir = netlist_to_ir(netlist)
     mapped = parts.map_netlist(netlist, ports, options=req.get("options"))
     stale = versions.is_stale(_active_ws(), netlist) if netlist else {"stale": False}
     return {

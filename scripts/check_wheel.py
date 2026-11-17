@@ -32,6 +32,7 @@ REQUIRED_SUBSTRINGS = [
     "app/static/pcb.js",
     "app/static/pcb.css",
     "app/static/proof.js",
+    "app/static/favicon.ico",
 ]
 
 

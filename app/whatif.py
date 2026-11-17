@@ -29,6 +29,21 @@ METRIC_NAMES = {"vpp": "输出峰峰值", "mean": "输出均值", "freq": "主�
                 "gain": "增益（out/in）", "fc": "-3dB 截止频率"}
 
 
+def canvas_with_component_value(canvas: dict | None, component: str, value: str) -> dict | None:
+    """只改被扫描元件的数值，保留手动画布的位置、接地和标签。"""
+    if not isinstance(canvas, dict) or not isinstance(canvas.get("comps"), list):
+        return None
+    import copy
+    out = copy.deepcopy(canvas)
+    found = False
+    for comp in out["comps"]:
+        if isinstance(comp, dict) and str(comp.get("name", "")).lower() == str(component).lower():
+            comp["value"] = value
+            found = True
+            break
+    return out if found else None
+
+
 def scan_components(netlist: str) -> list[dict]:
     """列出网表里可扫描的元件（名称/类型/当前值/节点），供前端下拉。"""
     out: list[dict] = []

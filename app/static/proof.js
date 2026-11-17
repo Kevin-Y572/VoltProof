@@ -3,6 +3,38 @@ window.VPProof = (() => {
   const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const labels = {passed:"✓ 指标达标", simulated:"仿真完成 · 尚未设置验收目标", incomplete:"验证不完整", failed:"未通过验证", cancelled:"任务已取消", explained:"电路解读"};
   const metrics = {fc:"截止频率", gain:"增益", ripple:"纹波", mean:"输出电压", vpp:"峰峰值", freq:"主频", rms:"有效值", thd:"总谐波失真", component_value:"元件参数"};
+  function resultClass(input) {
+    const errors = (input && input.errors) || [];
+    const watching = !!(input && (input.panelActive || input.armed || input.hasVerified));
+    if (!watching) return "idle";
+    if (errors.length) return "blocked";
+    if (input.hasVerified && input.stamp === input.verifiedStamp) return "fresh";
+    return "stale";
+  }
+  function clearsDirty(input) {
+    return !!(input && input.applied && input.sameCircuit);
+  }
+  function gridFromPointer(clientX, clientY, rect, opts) {
+    const viewW = (opts && opts.viewW) || 1000;
+    const viewH = (opts && opts.viewH) || 700;
+    const unit = (opts && opts.unit) || 20;
+    const maxX = opts && opts.maxX != null ? opts.maxX : viewW / unit;
+    const maxY = opts && opts.maxY != null ? opts.maxY : viewH / unit;
+    const width = rect && rect.width;
+    const height = rect && rect.height;
+    const scale = Math.min(width / viewW, height / viewH);
+    const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+    if (!(scale > 0) || !isFinite(scale)) return { gx: 0, gy: 0 };
+    const originX = rect.left + (width - viewW * scale) / 2;
+    const originY = rect.top + (height - viewH * scale) / 2;
+    const x = (clientX - originX) / scale;
+    const y = (clientY - originY) / scale;
+    return { gx: clamp(Math.round(x / unit), 0, maxX), gy: clamp(Math.round(y / unit), 0, maxY) };
+  }
+  function projectLoadPanel(input) {
+    if (input && !input.dirty && input.evidenceId && input.hasCanvas) return "restore";
+    return "keep";
+  }
   function requirementFromEditor(input) {
     if (input && input.preserve) {
       const spec = input.preserve;
@@ -67,6 +99,7 @@ window.VPProof = (() => {
     if (!r.ok) throw new Error(d.error || "应用失败");
     await window.VPBoard?.reloadProject();
     await window.VPBoard?.reloadRounds();
+    if (window.refreshWorkspaceInfo) window.refreshWorkspaceInfo();
   }
   document.addEventListener("click", async e => {
     const wave=e.target.closest("[data-wave-preview]");
@@ -87,7 +120,7 @@ window.VPProof = (() => {
   });
   function showWave(button,data) {
     const box=document.createElement("section");box.className="proof-wave";
-    box.innerHTML=`<div class="hints">${esc(data.note)} · 横轴 ${data.analysis==='ac'?'频率 Hz（对数）':data.analysis==='tran'?'时间 s':'样本'}</div><div data-signals></div><canvas height="240" style="width:100%;height:240px"></canvas><div data-cursor class="hints">移动鼠标读取波形；拖动下方范围查看局部。</div><label>起点 <input data-start type="range" min="0" max="98" value="0"></label><label>终点 <input data-end type="range" min="1" max="100" value="100"></label>${Object.keys(data.phase || {}).length ? '<label>纵轴 <select data-axis><option value="signals">幅值</option><option value="phase">节点相位 °</option></select></label>':''}`;
+    box.innerHTML=`<div class="hints">${esc(data.note)} · 横轴 ${data.analysis==='ac'?'频率 Hz（对数）':data.analysis==='tran'?'时间 s':'样本'}</div><div data-signals></div><div data-plot><canvas></canvas></div><div data-cursor class="wave-hint">移动鼠标读取波形；拖动下方范围查看局部。</div><label>起点 <input data-start type="range" min="0" max="98" value="0"></label><label>终点 <input data-end type="range" min="1" max="100" value="100"></label>${Object.keys(data.phase || {}).length ? '<label>纵轴 <select data-axis><option value="signals">幅值</option><option value="phase">节点相位 °</option></select></label>':''}`;
     button.after(box);button.hidden=true;
     const names=Object.keys(data.signals),palette=['#4f8cff','#e6a23c','#3fb96f','#e05555','#c391ef','#70d6d8'];
     box.querySelector('[data-signals]').innerHTML=names.map((n,i)=>`<label style="color:${palette[i%palette.length]};margin-right:8px"><input type="checkbox" data-signal="${i}" checked> ${esc(n)}</label>`).join('');
@@ -99,7 +132,8 @@ window.VPProof = (() => {
       const first=Math.floor(lo*(data.x.length-1)),last=Math.max(first+1,Math.ceil(hi*(data.x.length-1)));
       const active=[...box.querySelectorAll('[data-signal]:checked')].map(e=>Number(e.dataset.signal));
       const source=data[box.querySelector('[data-axis]')?.value || 'signals'];
-      const width=Math.max(280,box.clientWidth),height=240;
+      const plot = box.querySelector("[data-plot]");
+      const width=Math.max(280,(plot || box).clientWidth),height=220;
       canvas.width=width*devicePixelRatio;canvas.height=height*devicePixelRatio;ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
       ctx.clearRect(0,0,width,height);
       let min=Infinity,max=-Infinity;
@@ -169,5 +203,5 @@ window.VPProof = (() => {
     };
     document.body.append(dlg); dlg.showModal();
   }
-  return {esc, label, checks, details, comparison, compareVersions, applyVersion, editRequirements, requirementFromEditor};
+  return {esc, label, checks, details, comparison, compareVersions, applyVersion, editRequirements, requirementFromEditor, resultClass, clearsDirty, gridFromPointer, projectLoadPanel};
 })();

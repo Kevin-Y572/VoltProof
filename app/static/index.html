@@ -4,7 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>VoltProof —— 电路仿真实验助手</title>
-<link rel="stylesheet" href="board.css?v=0.3.0-proof2">
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="board.css?v=0.4.0-qa2">
 <link rel="stylesheet" href="pcb.css?v=1">
 <style>
   /* 统一主页：在画板骨架（board.css）上加第 4 列「对话面板」——
@@ -46,6 +47,7 @@
 </head>
 <body>
 <header>
+  <div class="head-main">
   <h1>⚡ VoltProof</h1>
   <span class="tagline">每一份回答都附带仿真证据 · ngspice 验证</span>
   <input id="title" type="text" value="未命名电路" title="电路名称（进入对话历史与实验报告）">
@@ -68,11 +70,13 @@
   <button class="btn" id="cirBtn" title="下载当前网表 (.cir)">导出 .cir</button>
   <button class="btn primary" id="simBtn">▶ 仿真</button>
   <button class="btn" id="aiBtn" disabled title="用大模型解释最近一次仿真结果（不改电路）">AI 解读</button>
-  <span style="flex:1"></span>
-  <span id="wsInfo" title="点击切换工作区" style="cursor:pointer;color:var(--acc);font-size:12px;max-width:26%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+  </div>
+  <div class="head-tools">
+  <span id="wsInfo" title="点击切换工作区" style="cursor:pointer;color:var(--acc);font-size:12px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
   <button id="llmBtn" title="大模型设置（供应商 / API Key / 模型）" class="hbtn">⚙ 模型</button>
   <button id="pcbBtn" title="PCB 导出（实验性）：验证过的电路 → 器件映射 → 自动布线 → DRC → 制板文件" class="hbtn">🔲 PCB</button>
   <button id="histBtn" title="对话历史" class="hbtn">对话</button>
+  </div>
 </header>
 
 <div id="tabbar">
@@ -91,7 +95,7 @@
       <button class="btn primary" id="applyBtn">✓ 应用到画布</button>
       <button class="btn" id="discardBtn">✗ 丢弃</button>
     </div>
-    <div id="canvasWrap"><svg id="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 700"></svg></div>
+    <div id="canvasWrap"><svg id="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 700" preserveAspectRatio="xMidYMid meet"></svg></div>
     <div id="status"></div>
   </div>
   <div id="side">
@@ -262,8 +266,8 @@
   </div>
 </div>
 
-<script src="proof.js?v=0.3.0-proof2"></script>
-<script src="board.js?v=0.3.0-proof2"></script>
+<script src="proof.js?v=0.4.0-qa2"></script>
+<script src="board.js?v=0.4.0-qa2"></script>
 <script src="pcb.js?v=1"></script>
 <script>
 (() => {
@@ -454,12 +458,15 @@ input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) {
 send_.addEventListener('click', send);
 
 // ---- 工作区（用户决定在哪个目录工作，产物全部留在其中）----
+let currentWsRoot = "";
 async function loadWsInfo() {
   try {
     const d = await (await fetch('/api/ws')).json();
+    currentWsRoot = d.root || "";
     wsInfo.textContent = `📁 ${d.root}${d.is_default ? '（默认）' : ''} · ${d.tasks} 任务`;
   } catch (e) { wsInfo.textContent = '📁 工作区不可用'; }
 }
+window.refreshWorkspaceInfo = loadWsInfo;
 
 function recentWs() { try { return JSON.parse(localStorage.getItem('cp_recent_ws') || '[]'); } catch { return []; } }
 function rememberWs(p) {
@@ -489,7 +496,7 @@ async function openWs(p) {
   } catch (e) { wsErr.textContent = String(e); }
 }
 
-wsInfo.addEventListener('click', () => { wsErr.textContent = ''; renderRecent(); wsDialog.style.display = 'flex'; wsInput.focus(); });
+wsInfo.addEventListener('click', () => { wsErr.textContent = ''; wsInput.value = currentWsRoot; renderRecent(); wsDialog.style.display = 'flex'; wsInput.focus(); });
 document.getElementById('wsCancelBtn').addEventListener('click', () => wsDialog.style.display = 'none');
 document.getElementById('wsOpenBtn').addEventListener('click', () => { if (wsInput.value.trim()) openWs(wsInput.value.trim()); });
 wsInput.addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('wsOpenBtn').click(); });
@@ -687,6 +694,8 @@ document.getElementById('wfRunBtn').addEventListener('click', async () => {
     if (!r.ok || d.error) throw new Error(d.error || '扫描失败');
     whatifDialog.style.display = 'none';
     addMsg('assistant', renderWhatif(d));
+    if (window.VPBoard) window.VPBoard.reloadRounds();
+    if (window.refreshWorkspaceInfo) window.refreshWorkspaceInfo();
   } catch (e) {
     wfMsg.style.color = 'var(--warn)'; wfMsg.textContent = String(e.message || e);
   }

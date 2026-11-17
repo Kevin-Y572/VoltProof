@@ -104,7 +104,9 @@ def candidate(ws, evidence: dict, canvas, base_revision: int, *, analysis=...) -
          "netlist": evidence.get("netlist", ""), "netlist_hash": digest(evidence.get("netlist", "")),
          "canvas": canvas, "analysis": ((canvas or {}).get("analysis") or p.get("analysis")) if analysis is ... else analysis,
          "requirements": evidence.get("requirements", []), "evidence_id": evidence.get("task_id", ""),
-         "verdict": evidence.get("verdict", "simulated"), "ok": bool(evidence.get("ok")),
+         "verdict": evidence.get("verdict", "simulated"),
+         # snapshot：仿真已经跑完。验收未达标也是可比较、可采用的版本。
+         "ok": bool(evidence.get("ok") or evidence.get("snapshot")),
          "created": time.strftime("%Y-%m-%d %H:%M:%S"), "source": evidence.get("source", "")}
     f = _version_path(ws, version_id)
     f.parent.mkdir(parents=True, exist_ok=True)
