@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>VoltProof —— 电路仿真实验助手</title>
 <link rel="icon" href="/favicon.ico">
-<link rel="stylesheet" href="board.css?v=0.4.0-qa">
+<link rel="stylesheet" href="board.css?v=0.4.0-qa2">
 <link rel="stylesheet" href="pcb.css?v=1">
 <style>
   /* 统一主页：在画板骨架（board.css）上加第 4 列「对话面板」——
@@ -95,7 +95,7 @@
       <button class="btn primary" id="applyBtn">✓ 应用到画布</button>
       <button class="btn" id="discardBtn">✗ 丢弃</button>
     </div>
-    <div id="canvasWrap"><svg id="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 700"></svg></div>
+    <div id="canvasWrap"><svg id="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 700" preserveAspectRatio="xMidYMid meet"></svg></div>
     <div id="status"></div>
   </div>
   <div id="side">
@@ -266,8 +266,8 @@
   </div>
 </div>
 
-<script src="proof.js?v=0.4.0-qa"></script>
-<script src="board.js?v=0.4.0-qa"></script>
+<script src="proof.js?v=0.4.0-qa2"></script>
+<script src="board.js?v=0.4.0-qa2"></script>
 <script src="pcb.js?v=1"></script>
 <script>
 (() => {

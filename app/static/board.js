@@ -143,8 +143,41 @@ async function loadProject() {
   projectRevision=p?.revision ?? 0; projectVersion=p?.version_id || ""; projectDirty=!!p?.dirty;
   projectRequirements=p?.requirements || [];
   projectMessage=""; lastSavedPayload=migrated ? "" : JSON.stringify(projectPayload()); projectLoaded=true;
+  const generation = loadGeneration;
+  const restoreId = VPProof.projectLoadPanel({
+    dirty: projectDirty, evidenceId: p?.evidence_id || "",
+    hasCanvas: !!(p && p.canvas && p.canvas.comps && p.canvas.comps.length),
+  }) === "restore" ? p.evidence_id : "";
+  if (restoreId) {
+    verifiedHTML = ""; verifiedStamp = ""; verifiedOK = false; resultMode = "idle"; blockedKey = "";
+    const panel = $("resultPanel");
+    panel.innerHTML = ""; panel.style.display = "none";
+  }
   render(); updateProjectState();
   updateAiPlaceholder();
+  if (restoreId) restoreEvidence(restoreId, generation);
+}
+
+async function restoreEvidence(taskId, generation) {
+  try {
+    const r = await fetch("/api/files/" + encodeURIComponent(taskId) + "/evidence.json");
+    if (!r.ok || generation !== loadGeneration) return;
+    const ev = await r.json();
+    if (generation !== loadGeneration || projectDirty) return;
+    ev.task_id = ev.task_id || taskId;
+    if (!ev.waveform_b64) {
+      const img = await fetch("/api/files/" + encodeURIComponent(taskId) + "/wave.png");
+      if (img.ok && generation === loadGeneration) {
+        const bytes = new Uint8Array(await img.arrayBuffer());
+        let binary = "";
+        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+        ev.waveform_b64 = btoa(binary);
+      }
+    }
+    if (generation !== loadGeneration || projectDirty) return;
+    renderResult(ev, circuitStamp());
+    resultArmed = true;
+  } catch (e) { /* 证据缺失时保持空白，不把已保存电路标成过期 */ }
 }
 
 // ---------------------------------------------------------------------------
@@ -585,9 +618,7 @@ function renderProps(pre) {
 // ---------------------------------------------------------------------------
 function evtGrid(e) {
   const r = svg.getBoundingClientRect();
-  const x = (e.clientX - r.left) * (1000 / r.width);
-  const y = (e.clientY - r.top) * (700 / r.height);
-  return { gx: inb(Math.round(x / U), 0, W), gy: inb(Math.round(y / U), 0, H) };
+  return VPProof.gridFromPointer(e.clientX, e.clientY, r, { viewW: 1000, viewH: 700, unit: U, maxX: W, maxY: H });
 }
 function autoName(pre) {
   let n = 1;

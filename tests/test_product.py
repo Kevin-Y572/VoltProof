@@ -438,6 +438,18 @@ if (resultClass({ errors: ["float"], stamp: "b", verifiedStamp: "", hasVerified:
 if (!clearsDirty({ applied: true, sameCircuit: true })) throw new Error("successful verify should clear dirty");
 if (clearsDirty({ applied: true, sameCircuit: false })) throw new Error("edit during verify should stay dirty");
 if (clearsDirty({ applied: false, sameCircuit: true })) throw new Error("unapplied verify should stay dirty");
+const grid = context.VPProof.gridFromPointer;
+const tall = { left: 0, top: 0, width: 1000, height: 1000 };
+const topOfPicture = grid(0, 150, tall, { viewW: 1000, viewH: 700, unit: 20, maxX: 50, maxY: 35 });
+if (topOfPicture.gy !== 0 || topOfPicture.gx !== 0) throw new Error("letterbox top should be grid 0,0 got " + JSON.stringify(topOfPicture));
+const mid = grid(500, 150 + 350, tall, { viewW: 1000, viewH: 700, unit: 20, maxX: 50, maxY: 35 });
+if (mid.gx !== 25 || mid.gy !== 18) throw new Error("letterbox center got " + JSON.stringify(mid));
+const wide = { left: 10, top: 20, width: 500, height: 700 };
+const leftPin = grid(10, 20 + 175, wide, { viewW: 1000, viewH: 700, unit: 20, maxX: 50, maxY: 35 });
+if (leftPin.gx !== 0 || leftPin.gy !== 0) throw new Error("side letterbox origin got " + JSON.stringify(leftPin));
+if (context.VPProof.projectLoadPanel({ dirty: false, evidenceId: "p1", hasCanvas: true }) !== "restore") throw new Error("applied evidence should restore");
+if (context.VPProof.projectLoadPanel({ dirty: true, evidenceId: "p1", hasCanvas: true }) !== "keep") throw new Error("dirty canvas must not restore over an edit");
+if (context.VPProof.resultClass({ errors: [], stamp: "edited", verifiedStamp: "saved", hasVerified: true, panelActive: true }) !== "stale") throw new Error("edit after apply stays stale");
 """
         proc = subprocess.run(["node", "-e", script, str(proof)], text=True, capture_output=True)
         self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
@@ -462,8 +474,9 @@ if (clearsDirty({ applied: false, sameCircuit: true })) throw new Error("unappli
         self.assertIn("wsInput.value = currentWsRoot", page)
         self.assertIn('rel="icon"', page)
         proof = (root / "app" / "static" / "proof.js").read_text(encoding="utf-8")
-        cursor = proof.split("data-cursor", 1)[0]
-        self.assertLess(proof.find("data-cursor"), proof.find("<canvas"))
+        self.assertIn("data-plot", proof)
+        self.assertLess(proof.find("data-plot"), proof.find("data-cursor"))
+        self.assertIn("preserveAspectRatio=\"xMidYMid meet\"", (root / "app" / "static" / "index.html").read_text(encoding="utf-8"))
         for name in ("draw.html", "compare.html"):
             text = (root / "app" / "static" / name).read_text(encoding="utf-8")
             self.assertIn('rel="icon"', text, name)
@@ -524,7 +537,18 @@ if (clearsDirty({ applied: false, sameCircuit: true })) throw new Error("unappli
             rev = client.get("/api/project").json()["revision"]
             scan = client.post("/api/whatif", json={"component": "R1", "values": ["2k"], "metric": "mean",
                                                     "expected_revision": rev}).json()
-        point = scan["points"][0]
+            point = scan["points"][0]
+            applied = client.post("/api/project/apply", json={"version_id": point["candidate_id"],
+                                                              "expected_revision": scan["base_revision"]})
+            self.assertEqual(applied.status_code, 200, applied.text[:300])
+            current = client.get("/api/project").json()
+            self.assertFalse(current["dirty"])
+            self.assertEqual(current["version_id"], point["candidate_id"])
+            evidence = client.get(f"/api/files/{current['evidence_id']}/evidence.json")
+            self.assertEqual(evidence.status_code, 200, evidence.text[:200])
+            body = evidence.json()
+            self.assertTrue(body.get("metrics") or body.get("checks"))
+            self.assertEqual(body.get("task_id"), current["evidence_id"])
         self.assertTrue(point.get("candidate_id"), scan)
         saved = project.read_version(self.ws, point["candidate_id"])
         self.assertEqual(saved["canvas"]["comps"][1]["value"], "2k")
