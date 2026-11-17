@@ -604,7 +604,7 @@ def chat_with_conversation_events(conversation_id: str | None, message: str,
                                   attachment: dict | None = None,
                                   workspace: Workspace | None = None, *,
                                   requirements: list[dict] | None = None, expected_revision=None,
-                                  cancelled=None, time_budget=600):
+                                  cancelled=None, time_budget=600, adopt: bool = True):
     """生成器版本：逐个 yield 管线事件，最后 yield {"type": "done", **响应}。
     响应 dict 与同步版 chat_with_conversation 完全一致（含 conversation_id）。"""
     ws = workspace or default_workspace()
@@ -694,13 +694,15 @@ def chat_with_conversation_events(conversation_id: str | None, message: str,
             _cv = None
         candidate = project.candidate(ws, ev.to_dict(), _cv, base_revision)
         candidate_id = ev.version_id = candidate["id"]
-        if action != "diagnose":
+        if adopt and action != "diagnose":
             try:
                 project.apply(ws, candidate_id)
                 applied = True
                 canvas_synced = True  # 空画布也需刷新，防止旧图代表新网表
             except project.Conflict as e:
                 ev.warnings.append(str(e))
+        elif not adopt:
+            ev.warnings.append("没有替换当前项目电路")
     if ev.task_id and not ev.from_cache:
         _write_evidence_file(ev, ws.task_docs_dir(ev.task_id))
     with project.lock(ws):

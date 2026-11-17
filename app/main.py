@@ -7,6 +7,7 @@
   POST /chat          {session_id, message} -> 证据包 JSON（仿真在环）
   POST /chat/stream   同 /chat，但以 SSE 逐事件推送修复环过程（前端进度）
   POST /demo/raw      {message}             -> 裸 LLM 回复（对照组，无仿真）
+  POST /demo/verified {message}             -> 临时工作区仿真（不改当前项目）
   POST /api/draw/verify   {netlist}         -> 画板网表直仿（安全门+静态检查+ngspice，零 LLM）
   POST /api/draw/interpret {conversation_id} -> AI 解读画板最近一次仿真（只解释不改）
 
@@ -209,6 +210,28 @@ def cancel_run(request_id: str):
             return JSONResponse(status_code=404, content={"error": "任务已结束或不存在"})
         event.set()
     return {"ok": True, "note": "已请求取消；当前模型调用返回后停止后续执行，不应用电路"}
+
+
+@app.post("/demo/verified")
+def demo_verified(req: RawReq):
+    """对照页：在一次性工作区仿真。成功也不采用，当前项目电路保持不变。"""
+    import tempfile
+    message = (req.message or "").strip()
+    if not message:
+        return JSONResponse(status_code=400, content={"error": "请输入对照问题"})
+    try:
+        with tempfile.TemporaryDirectory(prefix="voltproof-demo-") as tmp:
+            ws = Workspace(Path(tmp))
+            ws.ensure()
+            result = pipeline.chat_with_conversation(None, message, workspace=ws, adopt=False)
+        result["applied"] = False
+        result["demo"] = True
+        result["note"] = "对照演示只在临时工作区运行，没有替换当前项目电路。要留下设计，请回到工作台对话重新运行。"
+        return result
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 @app.post("/demo/raw")

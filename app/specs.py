@@ -73,6 +73,46 @@ def normalize(specs: list[dict]) -> list[dict]:
     return result
 
 
+def _filter_type(text: str, start: int = 0, end: int | None = None) -> str:
+    """从目标短语判断低通/高通。否定和对比分句里的「高通」不把低通目标翻成高通。"""
+    if end is None:
+        end = start
+    parts: list[tuple[int, int, str]] = []
+    cursor = 0
+    for mark in re.finditer(r"[，。；;\n]", text):
+        parts.append((cursor, mark.start(), text[cursor:mark.start()]))
+        cursor = mark.end()
+    parts.append((cursor, len(text), text[cursor:]))
+
+    def kind(clause: str) -> str | None:
+        cleaned = re.sub(
+            r"(?:不要做成|而不要|而不是|而非|不要|别|并非|不是|勿|而不能|不能|无需|不用|避免|非)"
+            r".{0,12}(?:高通|低通)",
+            "", clause)
+        cleaned = re.sub(r"(?:对比|比较|相比|对照|比起).{0,12}(?:高通|低通)", "", cleaned)
+        high = "高通" in cleaned
+        low = "低通" in cleaned
+        if high and not low:
+            return "highpass"
+        if low and not high:
+            return "lowpass"
+        if high and low:
+            return "lowpass" if cleaned.find("低通") <= cleaned.find("高通") else "highpass"
+        return None
+
+    for begin, stop, clause in parts:
+        if begin <= start < stop or begin < end <= stop or (start <= begin and stop <= end):
+            local = kind(clause)
+            if local:
+                return local
+            break
+    for _begin, _stop, clause in parts:
+        found = kind(clause)
+        if found:
+            return found
+    return "lowpass"
+
+
 def extract(text: str, inherited: list[dict] | None = None, previous_checks=None) -> list[dict]:
     """保守提取常见明确指标。未覆盖的量化目标留下未验证项，禁止默认为达标。"""
     result = copy.deepcopy(inherited or [])
@@ -105,12 +145,12 @@ def extract(text: str, inherited: list[dict] | None = None, previous_checks=None
             op = "gt"
         value = number(m["number"] + m["prefix"])
         found.append({"metric": metric, "op": op, "target": value, "tol": tol,
-                      "source": m[0], "filter_type": "highpass" if "高通" in text else "lowpass"})
+                      "source": m[0], "filter_type": _filter_type(text, m.start(), m.end())})
     if not any(s["metric"] == "fc" for s in found) and re.search(r"低通|高通", text):
         m = re.search(rf"{VALUE}\s*(?:的)?\s*(?:RC\s*)?(?:低通|高通)", text, re.I)
         if m:
             found.append({"metric": "fc", "target": number(m["number"] + m["prefix"]),
-                          "tol": tol, "source": m[0], "filter_type": "highpass" if "高通" in text else "lowpass"})
+                          "tol": tol, "source": m[0], "filter_type": _filter_type(text, m.start(), m.end())})
     for keyword in ("功耗", "相位裕度", "带宽", "输入阻抗", "输出阻抗"):
         if re.search(re.escape(keyword) + rf"[^，。；\n]{{0,15}}{NUMBER}", text):
             found.append({"metric": keyword, "target": 0, "source": "此指标需要专用测量设置"})
@@ -157,11 +197,19 @@ def evaluate(traces, specs: list[dict], netlist: str = "") -> list[dict]:
                 if depth or tokens[0].lower()!=spec.get("component", "").lower() or len(tokens)<4:
                     continue
                 idx=4 if tokens[3].lower()=="dc" else 3
+                if idx >= len(tokens):
+                    values.append(None)
+                    continue
+                token = tokens[idx]
+                # 花括号和表达式不是字面量；_spice_val 对无法解析的文本返回 0，不能拿来判达标。
+                if re.fullmatch(r"[-+0-9.eE]+[a-zA-Z]*", token) is None:
+                    values.append(None)
+                    continue
                 try:
-                    values.append(_spice_val(tokens[idx]))
+                    values.append(_spice_val(token))
                 except (ValueError, IndexError, KeyError):
-                    pass
-            value,error=(values[0],"") if len(values)==1 else (None,"元件不存在、重复或不是字面量数值")
+                    values.append(None)
+            value,error=(values[0],"") if len(values)==1 and values[0] is not None else (None,"元件不存在、重复或不是字面量数值")
         else:
             value, error = measure.compute_metric(traces, spec["metric"], spec["out"], spec["in"],
                                               netlist=netlist, exact=spec.get("explicit_nodes", False),

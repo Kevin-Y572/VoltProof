@@ -326,7 +326,8 @@ write out.raw v(out)
         r = client.get("/")
         check("GET / 返回对话页", r.status_code == 200 and "VoltProof" in r.text)
         r = client.get("/compare.html")
-        check("GET /compare.html 返回对照页", r.status_code == 200 and "同题对照" in r.text)
+        check("GET /compare.html 返回对照页", r.status_code == 200 and "同题对照" in r.text
+              and "/demo/verified" in r.text and "fetch('/chat'" not in r.text)
 
     with patch.object(llm, "chat", Scripted([GOOD, "接口解读。"])) as sc2, TestClient(app) as client:
         r = client.post("/chat", json={"conversation_id": "api-test", "message": "1kHz低通"})

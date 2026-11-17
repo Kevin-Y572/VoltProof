@@ -2,7 +2,29 @@
 window.VPProof = (() => {
   const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const labels = {passed:"✓ 指标达标", simulated:"仿真完成 · 尚未设置验收目标", incomplete:"验证不完整", failed:"未通过验证", cancelled:"任务已取消", explained:"电路解读"};
-  const metrics = {fc:"截止频率", gain:"增益", ripple:"纹波", mean:"输出电压", vpp:"峰峰值", freq:"主频", rms:"有效值", thd:"总谐波失真"};
+  const metrics = {fc:"截止频率", gain:"增益", ripple:"纹波", mean:"输出电压", vpp:"峰峰值", freq:"主频", rms:"有效值", thd:"总谐波失真", component_value:"元件参数"};
+  function requirementFromEditor(input) {
+    if (input && input.preserve) {
+      const spec = input.preserve;
+      if (!spec || typeof spec !== "object" || !spec.metric) throw new Error("无法保存未识别的验收条件");
+      return spec;
+    }
+    const metric = input && input.metric;
+    if (!metric || !Object.prototype.hasOwnProperty.call(metrics, metric)) throw new Error("请为每条条件选择指标");
+    const item = {
+      metric, op: input.op || "near", target: Number(input.target), tol: Number(input.tol),
+      out: String(input.out || "out").trim(), in: String(input.in || "in").trim(),
+      explicit_nodes: metric !== "component_value", filter_type: input.filter_type || "lowpass",
+    };
+    if (metric === "component_value") {
+      const component = String(input.component || "").trim();
+      if (!/^[RCLVI]\d+$/i.test(component)) throw new Error("元件参数需要位号，如 R1");
+      item.component = component;
+      item.unit = input.unit || "";
+      item.name = input.name || `${component} 参数`;
+    }
+    return item;
+  }
   const num = x => x == null ? "未测得" : Number(x).toLocaleString(undefined, {maximumSignificantDigits:6});
   function label(d) { return labels[d.verdict] || (d.ok ? "历史仿真结果 · 目标验收状态未知" : "验证失败"); }
   function checks(d) {
@@ -110,7 +132,17 @@ window.VPProof = (() => {
     dlg.innerHTML = `<h3>电路验收条件</h3><p class="hints">数值使用基本单位 Hz、V、倍、%。保存后需重新仿真；自然语言中的新目标仍可更新这些条件。</p><div class="requirement-rows"></div><button class="btn" data-add>＋ 添加条件</button><p class="proof-warning" data-message></p><div class="rowbtns"><button class="btn primary" data-save>保存条件</button><button class="btn" data-close>取消</button></div>`;
     function add(s={metric:"fc",target:1000,tol:.05,op:"near",out:"out",in:"in"}) {
       const row = document.createElement("div"); row.className="requirement-row";
-      row.innerHTML = `<select data-metric>${Object.entries(metrics).map(([k,v])=>`<option value="${k}" ${s.metric===k?"selected":""}>${v}</option>`).join("")}</select><select data-op>${[["near","约等于"],["le","≤"],["lt","<"],["ge","≥"],["gt",">"]].map(([k,v])=>`<option value="${k}" ${s.op===k?"selected":""}>${v}</option>`).join("")}</select><label>目标 <input data-target type="number" step="any" value="${esc(s.target)}"></label><label>容差 % <input data-tol type="number" min="0" max="100" value="${(s.tol ?? .05)*100}"></label><label>输出节点 <input data-out value="${esc(s.out || "out")}"></label><label>输入节点 <input data-in value="${esc(s.in || "in")}"></label><select data-filter><option value="lowpass">低通</option><option value="highpass" ${s.filter_type==="highpass"?"selected":""}>高通</option></select><button class="btn" data-remove>删除</button>`;
+      if (s.metric && !Object.prototype.hasOwnProperty.call(metrics, s.metric)) {
+        row.dataset.preserve = JSON.stringify(s);
+        row.innerHTML = `<span class="hints">保留原条件：${esc(s.name || s.metric)} = ${esc(s.target)} ${esc(s.unit || "")}</span><button class="btn" data-remove>删除</button>`;
+      } else {
+        row.dataset.name = s.name || "";
+        row.innerHTML = `<select data-metric>${Object.entries(metrics).map(([k,v])=>`<option value="${k}" ${s.metric===k?"selected":""}>${v}</option>`).join("")}</select><select data-op>${[["near","约等于"],["le","≤"],["lt","<"],["ge","≥"],["gt",">"]].map(([k,v])=>`<option value="${k}" ${s.op===k?"selected":""}>${v}</option>`).join("")}</select><span data-component-wrap><label>位号 <input data-component value="${esc(s.component || "")}"></label><label>单位 <input data-unit value="${esc(s.unit || "")}"></label></span><label>目标 <input data-target type="number" step="any" value="${esc(s.target)}"></label><label>容差 % <input data-tol type="number" min="0" max="100" value="${(s.tol ?? .05)*100}"></label><label>输出节点 <input data-out value="${esc(s.out || "out")}"></label><label>输入节点 <input data-in value="${esc(s.in || "in")}"></label><select data-filter><option value="lowpass">低通</option><option value="highpass" ${s.filter_type==="highpass"?"selected":""}>高通</option></select><button class="btn" data-remove>删除</button>`;
+        const metricSel = row.querySelector("[data-metric]");
+        const sync = () => { row.querySelector("[data-component-wrap]").hidden = metricSel.value !== "component_value"; };
+        metricSel.addEventListener("change", sync);
+        sync();
+      }
       row.querySelector("[data-remove]").onclick=()=>row.remove();
       dlg.querySelector(".requirement-rows").append(row);
     }
@@ -120,12 +152,16 @@ window.VPProof = (() => {
     dlg.addEventListener("close", ()=>dlg.remove());
     dlg.querySelector("[data-save]").onclick=async()=>{
       try {
-        const requirements = [...dlg.querySelectorAll(".requirement-row")].map(row=>({
-          metric:row.querySelector("[data-metric]").value, op:row.querySelector("[data-op]").value,
-          target:Number(row.querySelector("[data-target]").value), tol:Number(row.querySelector("[data-tol]").value)/100,
-          out:row.querySelector("[data-out]").value.trim(), in:row.querySelector("[data-in]").value.trim(),
-          explicit_nodes:true, filter_type:row.querySelector("[data-filter]").value
-        }));
+        const requirements = [...dlg.querySelectorAll(".requirement-row")].map(row => row.dataset.preserve
+          ? requirementFromEditor({preserve: JSON.parse(row.dataset.preserve)})
+          : requirementFromEditor({
+            metric:row.querySelector("[data-metric]").value, op:row.querySelector("[data-op]").value,
+            target:row.querySelector("[data-target]").value, tol:Number(row.querySelector("[data-tol]").value)/100,
+            out:row.querySelector("[data-out]").value, in:row.querySelector("[data-in]").value,
+            filter_type:row.querySelector("[data-filter]").value,
+            component:row.querySelector("[data-component]").value, unit:row.querySelector("[data-unit]").value,
+            name:row.dataset.name,
+          }));
         const r = await fetch("/api/project/requirements", {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({requirements, expected_revision:p.revision})});
         const d = await r.json(); if (!r.ok) throw new Error(d.error || "保存失败");
         await window.VPBoard?.reloadProject(); dlg.close();
@@ -133,5 +169,5 @@ window.VPProof = (() => {
     };
     document.body.append(dlg); dlg.showModal();
   }
-  return {esc, label, checks, details, comparison, compareVersions, applyVersion, editRequirements};
+  return {esc, label, checks, details, comparison, compareVersions, applyVersion, editRequirements, requirementFromEditor};
 })();

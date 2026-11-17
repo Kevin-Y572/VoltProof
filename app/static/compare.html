@@ -30,7 +30,7 @@
 </head>
 <body>
 <h1>同题对照：同一个问题，两种回答</h1>
-<div class="sub">左侧：直接问大模型（只得到文字） · 右侧：VoltProof（每个数字都来自 ngspice 实测）</div>
+<div class="sub">左侧：直接问大模型（只得到文字） · 右侧：VoltProof（每个数字都来自 ngspice 实测）。右侧在临时工作区运行，不会替换当前项目电路。</div>
 
 <div class="bar">
   <input id="q" value="设计一个截止频率1kHz的RC低通滤波器，并告诉我它的实际增益特性">
@@ -49,29 +49,31 @@
     <div id="r-body"></div>
   </div>
 </div>
-<div class="note">提示：把左侧给出的电路拿到 ngspice 里跑，参数可能是编的；右侧电路经过了真实仿真，指标是算出来的。</div>
+<div class="note">提示：把左侧给出的电路拿到 ngspice 里跑，参数可能是编的；右侧电路经过了真实仿真，指标是算出来的。这次演示不写入当前项目；要留下电路，请回到工作台重新运行。</div>
 
 <script>
 async function runBoth() {
   const q = document.getElementById('q').value.trim();
+  const runBtn = document.getElementById('run');
   if (!q) return;
-  run.disabled = true;
-  lStatus('请求中…'); rStatus('生成网表 → 仿真验证中…');
+  runBtn.disabled = true;
+  lStatus('请求中…'); rStatus('临时工作区仿真中，不会改当前项目…');
   document.getElementById('l-body').innerHTML = '';
   document.getElementById('r-body').innerHTML = '';
   const [l, r] = await Promise.allSettled([
     fetch('/demo/raw', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({message: q})}).then(x=>x.json()),
-    fetch('/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({message: q})}).then(x=>x.json()),
+    fetch('/demo/verified', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({message: q})}).then(x=>x.json()),
   ]);
   // 左：裸模型
   if (l.status === 'fulfilled' && l.value.text) {
     lStatus('完成（仅文字，未经验证）');
     document.getElementById('l-body').innerHTML = `<pre>${escapeHtml(l.value.text)}</pre>`;
   } else { lStatus('失败'); }
-  // 右：产品
+  // 右：临时工作区里的仿真，不采用到当前项目
   if (r.status === 'fulfilled' && !r.value.error) {
     const d = r.value;
-    rStatus(`完成 · ${d.elapsed}s`);
+    const kept = d.demo === true && d.applied === false;
+    rStatus(`完成 · ${d.elapsed}s${kept ? ' · 未改当前项目' : ''}`);
     const metrics = Object.entries(d.metrics||{}).map(([k,v])=>`<span class="metric">${k} <b>${v}</b></span>`).join('');
     const wave = d.waveform_b64 ? `<img class="wave" src="data:image/png;base64,${d.waveform_b64}">` : '';
     const checks = d.checks || [];
@@ -79,10 +81,15 @@ async function runBoth() {
       ? `<div style="margin-top:8px">${checks.map(c =>
           `<span class="metric" style="${c.ok ? '' : 'border-color:var(--warn)'}">${c.ok ? '✅' : '❌'} ${escapeHtml(c.name)}</span>`).join('')}</div>` : '';
     document.getElementById('r-body').innerHTML =
-      `<div class="verdict ${d.ok?'ok':'fail'}">${d.ok?'✅ 仿真验证通过':'⚠️ 未通过'}</div>${metrics}${wave}${checksHtml}`
+      `<div class="verdict ${d.ok?'ok':'fail'}">${d.ok?'✅ 仿真验证通过':'⚠️ 未通过'}</div>`
+      + (d.note ? `<div class="note">${escapeHtml(d.note)}</div>` : '')
+      + `${metrics}${wave}${checksHtml}`
       + (d.netlist ? `<pre>${escapeHtml(d.netlist)}</pre>` : '');
-  } else { rStatus('失败'); }
-  run.disabled = false;
+  } else {
+    const msg = r.status === 'fulfilled' ? (r.value.error || '失败') : '失败';
+    rStatus(msg);
+  }
+  runBtn.disabled = false;
 }
 
 function lStatus(t){ document.getElementById('l-status').textContent = t; }
