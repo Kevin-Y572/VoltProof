@@ -66,6 +66,13 @@ const compareBtn=document.createElement('button');compareBtn.className='btn';com
 compareBtn.onclick=()=>VPProof.compareVersions().catch(e=>{projectMessage=e.message;updateProjectState();});
 projectReport.before(compareBtn);
 
+function isDefaultTitle(name) {
+  const raw = String(name || "").trim();
+  return raw === "未命名电路" || raw === "Untitled circuit";
+}
+function applyTitle(name) {
+  $("title").value = !name || isDefaultTitle(name) ? tt("untitled") : name;
+}
 function projectPayload() {
   return {name:$("title").value || tt("untitled"), canvas:{comps,wires,labels},
     analysis:{type:$("analysis").value,tstop:$("tstop").value,fstart:$("fstart").value,fstop:$("fstop").value},
@@ -111,7 +118,7 @@ function applyProjectCanvas(p) {
     nextId = Math.max(1, ...comps.map(c => c.id), ...wires.map(w => w.id),
                       ...labels.map(l => l.id)) + 1;
   }
-  if (p && p.name) $("title").value = p.name;
+  if (p) applyTitle(p.name);
   const an = p && p.analysis;
   if (an && an.type) {
     $("analysis").value = an.type;
@@ -144,8 +151,7 @@ async function loadProject() {
       localStorage.removeItem("vp_draw_v1");
     } catch (e) { /* 迁移失败不阻塞 */ }
   }
-  if (p && p.name) $("title").value = p.name;
-  else $("title").value=tt("untitled");
+  applyTitle(p && p.name);
   projectRevision=p?.revision ?? 0; projectVersion=p?.version_id || ""; projectDirty=!!p?.dirty;
   projectRequirements=p?.requirements || [];
   projectMessage=""; lastSavedPayload=migrated ? "" : JSON.stringify(projectPayload()); projectLoaded=true;
@@ -1102,11 +1108,17 @@ function addRound(kind, text, ok) {
   renderRounds();
 }
 
+function roundLabel(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return tt("rounds.untitled");
+  return trs(raw);
+}
 function renderRounds() {
   const icon = { ai: "🤖", sim: "⚙", chat: "💬" };
-  $("roundsList").innerHTML = rounds.length ? rounds.map(r =>
-    `<div class="round ${r.ok ? "" : "fail"}" title="${esc(r.text)}">${icon[r.kind] || "•"} ${esc(r.text.slice(0, 26))} <span class="dim">${r.ok ? "✓" : "✗"}</span></div>`
-  ).join("") : `<span class="dim">${esc(tt("rounds.empty"))}</span>`;
+  $("roundsList").innerHTML = rounds.length ? rounds.map(r => {
+    const label = roundLabel(r.text);
+    return `<div class="round ${r.ok ? "" : "fail"}" title="${esc(label)}">${icon[r.kind] || "•"} ${esc(label.slice(0, 40))} <span class="dim">${r.ok ? "✓" : "✗"}</span></div>`;
+  }).join("") : `<span class="dim">${esc(tt("rounds.empty"))}</span>`;
 }
 
 async function restoreRounds() {
@@ -1117,7 +1129,7 @@ async function restoreRounds() {
       const src = task.source || "chat";
       const kind = src === "draw-sim" || src === "whatif" || src === "whatif-point" ? "sim" : (src === "draw-ai" ? "ai" : "chat");
       const text = (task.request || "").replace(/^画板仿真：/, "").replace(/^Canvas simulation: /, "");
-      return { kind, text: trs(text) || tt("rounds.untitled"), ok: !!task.ok };
+      return { kind, text, ok: !!task.ok };
     });
     rounds = fromTasks;
   } catch (e) { /* 服务端不可达：留空 */ }
@@ -1150,6 +1162,11 @@ loadProject();
 // 宿主集成（统一主页使用；独立 /draw.html 不调用）
 // ---------------------------------------------------------------------------
 document.addEventListener("vp-lang", () => {
+  if (isDefaultTitle($("title").value)) {
+    $("title").value = tt("untitled");
+    // 只改默认标题的语言，不算电路被编辑，也不另存一版。
+    if (projectLoaded) lastSavedPayload = JSON.stringify(projectPayload());
+  }
   requirementsBtn.textContent = tt("btn.accept");
   compareBtn.textContent = tt("btn.compare");
   projectReport.textContent = tt("btn.report");

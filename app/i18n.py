@@ -111,6 +111,13 @@ def _format(key: str, lang: str, kwargs: dict) -> str:
     return text.format(**kwargs) if kwargs else text
 
 
+def is_default_title(name: str | None) -> bool:
+    """内置电路名（两种语言都算）。用户自己起的名字返回 False。"""
+    raw = str(name or "").strip()
+    entry = _CATALOG.get("untitled") or {}
+    return raw in {entry.get("zh-CN") or "", entry.get("en") or ""} and bool(raw)
+
+
 def translate(text: str, depth: int = 0) -> str:
     """把已知的中文或英文整句换成当前语言。认不出的原文保持不动。"""
     if text is None or depth > 4:

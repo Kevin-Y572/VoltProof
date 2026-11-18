@@ -522,7 +522,7 @@ def whatif_run(req: WhatifReq):
                 continue
             point_id = f"{tid}-p{i + 1}"
             nl = (ws.task_sim_dir(tid) / f"point-{i + 1}" / "circuit.cir").read_text(encoding="utf-8")
-            ev = pipeline.Evidence(ok=True, request=f"参数扫描 {req.component}={point['value']}", netlist=nl,
+            ev = pipeline.Evidence(ok=True, request=i18n.t_zh("timeline.whatif.point", comp=req.component, value=point["value"]), netlist=nl,
                 source="whatif-point", task_id=point_id, requirements=p.get("requirements", []),
                 metrics=point.get("metrics", {}), checks=point.get("checks", []),
                 verdict="passed" if point.get("checks") else "simulated",
@@ -543,7 +543,7 @@ def whatif_run(req: WhatifReq):
             point["candidate_id"] = v["id"]
         d["recommended_index"] = next((i for i, point in enumerate(d.get("points", [])) if point.get("passed") is True), None)
         d.update(version_id=p.get("version_id"), base_revision=project.revision(p), source="whatif", task_id=tid)
-        scan_ev = pipeline.Evidence(ok=True, request=f"参数扫描 {req.component} × {d.get('metric_name') or req.metric}",
+        scan_ev = pipeline.Evidence(ok=True, request=i18n.t_zh("timeline.whatif.scan", comp=req.component, metric=whatif.metric_label(req.metric, lang="zh-CN")),
                                     source="whatif", task_id=tid, netlist=netlist, verdict="simulated")
         pipeline._write_evidence_file(scan_ev, ws.task_docs_dir(tid))
         f = ws.task_docs_dir(tid) / "scan.json"

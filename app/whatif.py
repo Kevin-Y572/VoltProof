@@ -27,6 +27,22 @@ _PLAIN_NUM_RE = re.compile(r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?"
 
 METRIC_NAMES = {"vpp": "输出峰峰值", "mean": "输出均值", "freq": "主频",
                 "gain": "增益（out/in）", "fc": "-3dB 截止频率"}
+_METRIC_KEYS = {"vpp": "metric.vpp", "mean": "metric.mean", "freq": "metric.freq",
+                "gain": "metric.gain", "fc": "metric.fc"}
+
+
+def metric_label(metric: str, *, lang: str | None = None) -> str:
+    """扫描指标的界面名。lang 为空时用当前请求语言。"""
+    key = _METRIC_KEYS.get(metric)
+    if not key:
+        return METRIC_NAMES.get(metric, metric)
+    if lang == "zh-CN":
+        return i18n.t_zh(key)
+    return i18n.t(key)
+
+
+def chart_title(component: str, metric: str) -> str:
+    return i18n.t("api.whatif_title", comp=component, metric=metric_label(metric))
 
 
 def canvas_with_component_value(canvas: dict | None, component: str, value: str) -> dict | None:
@@ -141,7 +157,7 @@ def run_scan(netlist: str, component: str, values: list[str], metric: str,
     png = _plot_family(curves, metric, out_frag, component, workdir,
                        analysis=tr.analysis if curves else "unknown")
     out = {"component": component, "metric": metric,
-           "metric_name": METRIC_NAMES[metric], "points": points,
+           "metric_name": metric_label(metric), "points": points,
            "note": i18n.t("api.whatif_note")}
     if png:
         out["png_b64"] = base64.b64encode(png.read_bytes()).decode()
@@ -172,7 +188,7 @@ def _plot_family(curves, metric: str, out_frag: str, comp: str, workdir: Path, a
         ax.set_xlabel("time (s)" if curves[0][1] is not None else "sample")
     ax.set_ylabel(out_frag)
     ax.grid(True, alpha=0.3, which="both")
-    ax.set_title(i18n.t("api.whatif_title", comp=comp, metric=METRIC_NAMES.get(metric, metric)), fontsize=10)
+    # 图题随界面语言变，不写进像素里；否则切语言后旧图仍是生成时的语言。
     ax.legend(title=comp, loc="best", fontsize=7.5, title_fontsize=8)
     fig.tight_layout()
     out_png = workdir / "whatif.png"

@@ -612,6 +612,38 @@ class LocaleTest(unittest.TestCase):
         self.assertEqual(i18n.translate("Chat not found"), "对话不存在")
         self.assertEqual(i18n.t("verdict.passed"), "✓ 指标达标")
 
+    def test_leftover_ui_strings_follow_language(self):
+        from app import i18n
+        from app.whatif import chart_title
+        self.assertTrue(i18n.is_default_title("未命名电路"))
+        self.assertTrue(i18n.is_default_title("Untitled circuit"))
+        self.assertFalse(i18n.is_default_title("RC 低通滤波器示例"))
+        point = "参数扫描 R1=10k"
+        scan = "参数扫描 R1 × -3dB 截止频率"
+        warning = "AI 解读暂时不可用，仿真证据已保留：RuntimeError"
+        token = i18n.use("en")
+        try:
+            self.assertEqual(i18n.translate(point), "Parameter sweep R1=10k")
+            self.assertEqual(i18n.translate(scan), "Parameter sweep R1 × −3 dB cutoff")
+            self.assertEqual(
+                i18n.t("api.interpret_down", detail="RuntimeError"),
+                "AI interpretation is temporarily unavailable; the simulation evidence was kept: RuntimeError",
+            )
+            self.assertEqual(i18n.translate(warning), i18n.t("api.interpret_down", detail="RuntimeError"))
+            title = chart_title("R1", "fc")
+            self.assertNotIn("截止", title)
+            self.assertIn("cutoff", title)
+            self.assertIn("R1", title)
+        finally:
+            i18n.reset(token)
+        self.assertEqual(i18n.translate("Parameter sweep R1=10k"), point)
+        self.assertEqual(i18n.translate("Parameter sweep R1 × −3 dB cutoff"), scan)
+        self.assertIn("暂时不可用", i18n.translate(
+            "AI interpretation is temporarily unavailable; the simulation evidence was kept: RuntimeError"))
+        self.assertIn("RuntimeError", i18n.translate(
+            "AI interpretation is temporarily unavailable; the simulation evidence was kept: RuntimeError"))
+        self.assertIn("-3dB 截止频率", chart_title("R1", "fc"))
+
     def test_pages_offer_both_languages_and_do_not_follow_the_browser(self):
         import json
         from pathlib import Path

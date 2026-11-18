@@ -104,7 +104,7 @@ def _round_html(ws: Workspace, idx: int, request: str, ev: dict) -> str:
     if ev.get("version_id"):
         parts.append(f'<p class="dim">{_e(i18n.t("report.version", id=ev["version_id"], task=task_id))}</p>')
     for warning in ev.get("warnings", []):
-        parts.append(f'<p class="verdict-fail">{_e(warning)}</p>')
+        parts.append(f'<p class="verdict-fail">{_e(i18n.translate(warning))}</p>')
     if ev.get("provenance"):
         parts.append(f'<details><summary>{_e(i18n.t("report.provenance"))}</summary><pre>{_e(json.dumps(ev["provenance"], ensure_ascii=False, indent=2))}</pre></details>')
     comparison=ev.get("comparison") or {}
@@ -185,9 +185,12 @@ def build_project_report(ws: Workspace, version_id=None) -> str:
             d = json.loads(scan.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        parts.append(f'<h2>参数扫描：{_e(d.get("component"))}</h2><p class="dim">基于版本 {_e(d.get("version_id"))}</p>')
+        from .whatif import chart_title, metric_label
+        metric = str(d.get("metric") or "")
+        label = metric_label(metric) if metric else i18n.translate(str(d.get("metric_name") or ""))
+        parts.append(f'<h2>{_e(i18n.t("report.scan", comp=d.get("component")))}</h2><p class="dim">{_e(chart_title(str(d.get("component") or ""), metric) if metric else "")} {_e(i18n.t("report.scanBase", id=d.get("version_id")))}</p>')
         rows = ''.join(f'<tr><td>{_e(pt.get("value"))}</td><td>{_e(pt.get("metric"))}</td><td>{_e(i18n.t("report.hit") if pt.get("passed") is True else i18n.t("report.miss") if pt.get("passed") is False else i18n.t("report.notarget"))}</td></tr>' for pt in d.get("points", []))
-        parts.append(f'<table><tr><th>参数</th><th>{_e(d.get("metric_name"))}</th><th>目标验收</th></tr>{rows}</table>')
+        parts.append(f'<table><tr><th>{_e(i18n.t("report.param"))}</th><th>{_e(label)}</th><th>{_e(i18n.t("report.accept"))}</th></tr>{rows}</table>')
         parts.append(_img_tag(folder / "whatif.png"))
     parts.append(_pcb_section(ws))
     parts.append('</body></html>')

@@ -108,7 +108,7 @@ window.VPProof = (() => {
     return rows ? `<table class="proof-table"><thead><tr><th>${esc(t("check.col.metric"))}</th><th>${esc(t("check.col.target"))}</th><th>${esc(t("check.col.measured"))}</th><th>${esc(t("check.col.judge"))}</th></tr></thead><tbody>${rows}</tbody></table>` : "";
   }
   function details(d) {
-    return `${(d.warnings || []).map(w => `<div class="proof-warning">${esc(w)}</div>`).join("")}
+    return `${(d.warnings || []).map(w => `<div class="proof-warning">${esc(tr(w))}</div>`).join("")}
       ${d.from_cache ? `<div class="hints">${esc(t("proof.cached", {when: d.provenance?.created || ""}))}</div>` : ""}
       ${d.version_id ? `<div class="hints">${esc(t("proof.version", {id: d.version_id.slice(0, 8)}))}${d.applied === false ? esc(t("proof.candidate")) : ""}</div>` : ""}
       ${d.changes ? `<details><summary>${esc(t("proof.changes"))}</summary><pre>${esc(d.changes)}</pre></details>` : ""}

@@ -398,7 +398,7 @@ def iter_pipeline_events(request: str, previous_netlist: str | None = None,
                     thinking=False,
                 )
             except Exception as e:
-                ev.warnings.append(f"AI 解读暂时不可用，仿真证据已保留：{type(e).__name__}")
+                ev.warnings.append(i18n.t("api.interpret_down", detail=type(e).__name__))
 
         # 电路原理图：优先确定性自动布局（网表→graphviz 坐标→按位渲染），
         # 失败才回退 LLM 生成 schemdraw 代码的老路
