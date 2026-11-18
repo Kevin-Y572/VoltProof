@@ -20,9 +20,10 @@ import time
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from .. import i18n
 from ..circuit_ir import netlist_to_ir
 from ..project import Conflict
 from . import connectivity, jobs, kicad_backend, parts, router_backend, schema, versions
@@ -46,7 +47,7 @@ def _project_netlist(req: dict) -> str | JSONResponse:
             return JSONResponse(status_code=400, content={"error": str(e)})
         if not netlist.strip():
             return JSONResponse(status_code=400,
-                                content={"error": "项目里还没有已验证的电路——先在画布或对话里完成一次仿真"})
+                                content={"error": i18n.t("api.pcb_no_circuit")})
         return netlist
     return str(req.get("netlist") or "")[:200_000]
 
@@ -95,10 +96,10 @@ def capabilities():
     return {
         "available": bool(k and jar and java),
         "kicad": {"found": bool(k), "version": k.version() if k else None,
-                  "hint": "设 VOLTPROOF_KICAD=<KiCad 根目录>（bin/ 含 kicad-cli.exe 与 python.exe）或安装 KiCad 10.x"},
+                  "hint": i18n.t("api.kicad_hint")},
         "freerouting": {"found": bool(jar), "version": jar.name if jar else None,
-                        "hint": "设 VOLTPROOF_FREEROUTING=<freerouting-*.jar>；须用 JVM JAR（v2.5.0 原生 CLI 有已知缺陷）"},
-        "java": {"found": java, "hint": "安装 Java 21+（JVM JAR 依赖）"},
+                        "hint": i18n.t("api.free_hint")},
+        "java": {"found": java, "hint": i18n.t("api.java_hint")},
         "catalog_entries": len(parts.load_catalog()["entries"]),
     }
 
@@ -117,7 +118,7 @@ def preflight(req: dict):
     else:
         ports = req.get("ports") or []
     if not isinstance(ports, list) or len(ports) > 16:
-        return JSONResponse(status_code=400, content={"error": "ports 须为 ≤16 项数组"})
+        return JSONResponse(status_code=400, content={"error": i18n.t("api.pcb_ports")})
     ports = [str(p)[:40] for p in ports]
     caps = capabilities()
     mapped = parts.map_netlist(netlist, ports, options=req.get("options"))
@@ -158,10 +159,10 @@ def create_job(req: dict):
     if isinstance(netlist, JSONResponse):
         return netlist
     if not netlist.strip():
-        return JSONResponse(status_code=400, content={"error": "netlist 不能为空"})
+        return JSONResponse(status_code=400, content={"error": i18n.t("api.pcb_netlist")})
     ports = req.get("ports") or []
     if not isinstance(ports, list) or len(ports) > 16:
-        return JSONResponse(status_code=400, content={"error": "ports 须为 ≤16 项数组"})
+        return JSONResponse(status_code=400, content={"error": i18n.t("api.pcb_ports")})
     ports = [str(p)[:40] for p in ports]
     max_passes = int(req.get("max_passes") or 10)
     timeout_s = int(req.get("timeout_s") or 180)
@@ -207,7 +208,7 @@ def job_status(job_id: str):
                     return json.loads(manifest.read_text(encoding="utf-8")) | {"archived": True}
                 except (json.JSONDecodeError, OSError):
                     pass
-            return JSONResponse(status_code=404, content={"error": "任务不存在"})
+            return JSONResponse(status_code=404, content={"error": i18n.t("api.pcb_job_missing")})
         out = {"job_id": job_id, "done": st["result"] is not None,
                "stages": st["stages"]}
         if st["result"] is not None:
@@ -220,7 +221,7 @@ def cancel_job(job_id: str):
     with _jobs_lock:
         st = _jobs.get(job_id)
         if st is None:
-            return JSONResponse(status_code=404, content={"error": "任务不存在"})
+            return JSONResponse(status_code=404, content={"error": i18n.t("api.pcb_job_missing")})
         if st["result"] is not None:
             return {"ok": True, "note": "任务已结束"}
         st["cancel"].set()
@@ -228,17 +229,20 @@ def cancel_job(job_id: str):
 
 
 @router.get("/jobs/{job_id}/events")
-def job_events(job_id: str):
+def job_events(job_id: str, request: Request):
     """SSE 进度（§6.2 接口表）：逐阶段 stage 事件 + 终态 done/error。
     与轮询共用同一内存注册表；任务未知立即推 error 收尾。"""
+    lang = i18n.from_request(request)
+
     def gen():
         sent = 0
+        token = i18n.use(lang)
         try:
             while True:
                 with _jobs_lock:
                     st = _jobs.get(job_id)
                 if st is None:
-                    yield f'data: {json.dumps({"type": "error", "error": "任务不存在"}, ensure_ascii=False)}\n\n'
+                    yield f'data: {json.dumps({"type": "error", "error": i18n.t("api.pcb_job_missing")}, ensure_ascii=False)}\n\n'
                     return
                 for ev in list(st["stages"])[sent:]:
                     yield f'data: {json.dumps(ev, ensure_ascii=False)}\n\n'
@@ -251,6 +255,8 @@ def job_events(job_id: str):
                 time.sleep(0.6)
         except GeneratorExit:  # 客户端断开（前端切页签）——任务照常跑，轮询兜底
             return
+        finally:
+            i18n.reset(token)
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache"})
 
@@ -270,7 +276,7 @@ def list_pcb_versions():
 def pcb_version_detail(version_id: str):
     v = versions.get_version(_active_ws(), version_id)
     if v is None:
-        return JSONResponse(status_code=404, content={"error": "版本不存在"})
+        return JSONResponse(status_code=404, content={"error": i18n.t("api.pcb_ver_missing")})
     return v
 
 
@@ -296,11 +302,11 @@ def apply_version(req: dict):
 def update_placement(version_id: str, req: dict):
     moves = req.get("moves") or {}
     if not isinstance(moves, dict) or not moves or len(moves) > 64:
-        return JSONResponse(status_code=400, content={"error": "moves 须为非空对象（≤64 项）"})
+        return JSONResponse(status_code=400, content={"error": i18n.t("api.pcb_moves")})
     clean: dict[str, dict] = {}
     for ref, m in moves.items():
         if not isinstance(ref, str) or len(ref) > 16:
-            return JSONResponse(status_code=400, content={"error": f"位号非法：{ref!r}"})
+            return JSONResponse(status_code=400, content={"error": i18n.t("api.pcb_ref", ref=repr(ref))})
         try:
             mm = float(m.get("x")), float(m.get("y"))
             if not (0 <= mm[0] <= 500 and 0 <= mm[1] <= 500):
@@ -310,14 +316,14 @@ def update_placement(version_id: str, req: dict):
                 entry["rot"] = float(m["rot"]) % 360
             clean[ref] = entry
         except (TypeError, ValueError, AttributeError):
-            return JSONResponse(status_code=400, content={"error": f"{ref} 的 x/y/rot 非法（毫米/度）"})
+            return JSONResponse(status_code=400, content={"error": i18n.t("api.pcb_xy", ref=ref)})
     ws = _active_ws()
     src = versions.get_version(ws, version_id)
     if src is None:
-        return JSONResponse(status_code=404, content={"error": "版本不存在"})
+        return JSONResponse(status_code=404, content={"error": i18n.t("api.pcb_ver_missing")})
     src_board = _pcb_root(ws) / str(src.get("job_id")) / "final" / "board.kicad_pcb"
     if not src_board.is_file():
-        return JSONResponse(status_code=410, content={"error": "基板文件缺失"})
+        return JSONResponse(status_code=410, content={"error": i18n.t("api.pcb_board_missing")})
     # 源网表/端口从该版本任务归档取（一致性对照同源）
     src_input = _pcb_root(ws) / str(src.get("job_id")) / "input"
     netlist = (src_input / "netlist.txt").read_text(encoding="utf-8") \
@@ -329,11 +335,11 @@ def update_placement(version_id: str, req: dict):
         except (json.JSONDecodeError, OSError):
             ports = []
     if not netlist:
-        return JSONResponse(status_code=410, content={"error": "源任务的网表归档缺失"})
+        return JSONResponse(status_code=410, content={"error": i18n.t("api.pcb_archive_missing")})
     kicad = kicad_backend.find_kicad()
     jar = router_backend.find_freerouting()
     if kicad is None or jar is None:
-        return JSONResponse(status_code=400, content={"error": "PCB 工具不全，无法重布线"})
+        return JSONResponse(status_code=400, content={"error": i18n.t("api.pcb_tools")})
     job_id = schema.new_job_id()
     result = jobs.run_pcb_job(netlist, ports, _pcb_root(ws) / job_id, ws=ws,
                               options=req.get("options"),
@@ -355,7 +361,7 @@ def recheck(req: dict):
     ws = _active_ws()
     version = versions.get_version(ws, version_id)
     if version is None:
-        return JSONResponse(status_code=404, content={"error": "版本不存在"})
+        return JSONResponse(status_code=404, content={"error": i18n.t("api.pcb_ver_missing")})
     src_input = _pcb_root(ws) / str(version.get("job_id")) / "input"
     netlist = (src_input / "netlist.txt").read_text(encoding="utf-8") \
         if (src_input / "netlist.txt").is_file() else ""
@@ -368,9 +374,9 @@ def recheck(req: dict):
     board = _pcb_root(ws) / str(version.get("job_id")) / "final" / "board.kicad_pcb"
     kicad = kicad_backend.find_kicad()
     if not board.is_file():
-        return JSONResponse(status_code=410, content={"error": "板文件缺失"})
+        return JSONResponse(status_code=410, content={"error": i18n.t("api.pcb_board_gone")})
     if kicad is None:
-        return JSONResponse(status_code=400, content={"error": "KiCad 不可用"})
+        return JSONResponse(status_code=400, content={"error": i18n.t("api.pcb_kicad")})
     drc = kicad_backend.drc(kicad, board,
                             _pcb_root(ws) / str(version.get("job_id")) / "checks" / "drc_recheck.json")
     # 板级引脚对照（验收 F01）：复核必须读【当前板文件的真实焊盘】，
@@ -439,14 +445,14 @@ def preview(version_id: str):
     ws = _active_ws()
     version = versions.get_version(ws, version_id)
     if version is None:
-        return JSONResponse(status_code=404, content={"error": "版本不存在"})
+        return JSONResponse(status_code=404, content={"error": i18n.t("api.pcb_ver_missing")})
     board = _pcb_root(ws) / str(version.get("job_id")) / "final" / "board.kicad_pcb"
     if not board.is_file():
         return JSONResponse(status_code=410,
-                            content={"error": "板文件缺失（工作区被移动或清理）"})
+                            content={"error": i18n.t("api.pcb_moved")})
     data = kicad_backend.preview_from_pcb(board)
     if data is None:
-        return JSONResponse(status_code=422, content={"error": "板文件解析失败"})
+        return JSONResponse(status_code=422, content={"error": i18n.t("api.pcb_parse")})
     data["version_id"] = version_id
     data["status"] = version.get("status")
     return data
@@ -458,26 +464,25 @@ def export_package(req: dict):
     ws = _active_ws()
     version = versions.get_version(ws, version_id)
     if version is None:
-        return JSONResponse(status_code=404, content={"error": "版本不存在"})
+        return JSONResponse(status_code=404, content={"error": i18n.t("api.pcb_ver_missing")})
     if version.get("status") != schema.CHECKED:
         return JSONResponse(status_code=400,
-                            content={"error": "仅检查通过的版本可导出制板包"})
+                            content={"error": i18n.t("api.pcb_export_status")})
     cur = versions.current(ws)
     if cur is None or cur.get("version_id") != version_id:
         return JSONResponse(status_code=400,
-                            content={"error": "该版本不是当前采用的板（导出须从当前版本冻结）"})
+                            content={"error": i18n.t("api.pcb_export_current")})
     fab_dir = _pcb_root(ws) / str(version.get("job_id")) / "fabrication"
     if not fab_dir.is_dir():
         return JSONResponse(status_code=410,
-                            content={"error": "制板产物目录缺失（工作区被移动或清理）"})
+                            content={"error": i18n.t("api.pcb_fab_missing")})
     # —— 冻结验证（验收 F04：检查结论必须绑定同一份内容）——
     board = _pcb_root(ws) / str(version.get("job_id")) / "final" / "board.kicad_pcb"
     if not board.is_file():
-        return JSONResponse(status_code=410, content={"error": "板文件缺失"})
+        return JSONResponse(status_code=410, content={"error": i18n.t("api.pcb_board_gone")})
     if _sha256_file(board) != version.get("board_hash"):
         return JSONResponse(status_code=409,
-                            content={"error": "板文件已被修改（与检查时哈希不符）："
-                                             "请在 KiCad 修改后执行回导再检查并重新导出"})
+                            content={"error": i18n.t("api.pcb_hash")})
     files = sorted(p.name for p in fab_dir.iterdir())
     required = [f for f in files if f.endswith(".gbrjob")]
     drill = [f for f in files if f.endswith(".drl")]
@@ -491,8 +496,7 @@ def export_package(req: dict):
         missing.append("BOM.csv")
     if missing:
         return JSONResponse(status_code=422,
-                            content={"error": f"制板产物不完整（缺 {'、'.join(missing)}），"
-                                             f"目录现有 {len(files)} 个文件"})
+                            content={"error": i18n.t("api.pcb_incomplete", missing="、".join(missing), n=len(files))})
     # 源电路过期：默认拒绝；显式 history=true 返回历史版本标记（计划允许）
     from .. import project as _project
     try:
@@ -503,8 +507,7 @@ def export_package(req: dict):
                       != version.get("source_netlist_hash"))
     if historical and not req.get("history"):
         return JSONResponse(status_code=409,
-                            content={"error": "源电路已变化：该制板包对应旧电路。"
-                                             "如需导出历史版本请带 history=true（将明确标记为历史产物）"})
+                            content={"error": i18n.t("api.pcb_history")})
     manifest = {f: _sha256_file(fab_dir / f) for f in files}
     return {"ok": True, "version_id": version_id,
             "board_hash": version.get("board_hash"),

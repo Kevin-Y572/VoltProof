@@ -5,6 +5,9 @@
  * IIFE 封装，宿主接口 window.VPPcb = { setVisible }。 */
 (function () {
   'use strict';
+  const tt = (k, v) => VPI18n.t(k, v);
+  const trs = s => VPI18n.tr(s);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const $ = (id) => document.getElementById(id);
   const svg = $('pcbSvg');
   const NS = 'http://www.w3.org/2000/svg';
@@ -30,7 +33,7 @@
     if (body) { opt.headers = { 'Content-Type': 'application/json' }; opt.body = JSON.stringify(body); }
     const r = await fetch(path, opt);
     const d = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(d.error || (r.status + ' ' + r.statusText));
+    if (!r.ok) throw new Error(trs(d.error) || (r.status + ' ' + r.statusText));
     return d;
   }
 
@@ -41,15 +44,15 @@
       const c = await api('/api/pcb/capabilities');
       const dot = (ok, name, hint) =>
         `<div class="pcbstage"><span class="${ok ? 'ok' : 'no'}">${ok ? '●' : '○'}</span>` +
-        `<span>${name}${ok ? '' : ' —— ' + hint}</span></div>`;
-      box.innerHTML = '<b style="font-size:13.5px">工具链</b>' +
-        dot(c.kicad.found, 'KiCad' + (c.kicad.version ? ' ' + c.kicad.version : ''), c.kicad.hint) +
-        dot(c.freerouting.found, 'Freerouting（' + (c.freerouting.version || '缺失') + '）', c.freerouting.hint) +
-        dot(c.java.found, 'Java 运行时', c.java.hint) +
-        '<div class="hint" style="margin-top:6px">审校器件库 ' + c.catalog_entries + ' 条。' +
-        (c.available ? '工具齐备，可生成 PCB。' : '工具不全：预检仍可用，任务会被拒绝并给出安装指引。') +
+        `<span>${esc(name)}${ok ? '' : ' —— ' + esc(hint)}</span></div>`;
+      box.innerHTML = '<b style="font-size:13.5px">' + esc(tt('pcb.tools')) + '</b>' +
+        dot(c.kicad.found, 'KiCad' + (c.kicad.version ? ' ' + c.kicad.version : ''), trs(c.kicad.hint)) +
+        dot(c.freerouting.found, tt('pcb.free', {ver: c.freerouting.version || tt('pcb.freeMissing')}), trs(c.freerouting.hint)) +
+        dot(c.java.found, tt('pcb.java'), trs(c.java.hint)) +
+        '<div class="hint" style="margin-top:6px">' + esc(tt('pcb.catalog', {n: c.catalog_entries})) +
+        esc(c.available ? tt('pcb.ready') : tt('pcb.notReady')) +
         '</div>';
-    } catch (e) { box.innerHTML = '<span class="hint" style="color:var(--warn)">工具探测失败：' + e.message + '</span>'; }
+    } catch (e) { box.innerHTML = '<span class="hint" style="color:var(--warn)">' + esc(tt('pcb.capFail', {msg: e.message})) + '</span>'; }
   }
 
   // —— 预检 ——
@@ -57,7 +60,7 @@
 
   async function doPreflight() {
     const out = $('pcbPreOut');
-    out.textContent = '预检中…';
+    out.textContent = tt('pcb.preRunning');
     $('pcbRunBtn').disabled = true;
     try {
       const body = { use_project: true };
@@ -65,16 +68,16 @@
       else body.auto_ports = true;
       pre = await api('/api/pcb/preflight', body);
       const roles = pre.elements.map(e =>
-        `<span class="badge">${e.ref}·${e.kind}→${e.role === 'device' ? '器件' : e.role === 'stimulus' ? '激励' : '⛔阻断'}</span>`).join('');
+        `<span class="badge">${esc(e.ref)}·${esc(e.kind)}→${esc(e.role === 'device' ? tt('pcb.role.device') : e.role === 'stimulus' ? tt('pcb.role.stimulus') : tt('pcb.role.blocked'))}</span>`).join('');
       let html = '<div>' + roles + '</div>';
       if (pre.blockers.length) {
-        html += '<div style="color:var(--warn);margin-top:6px">阻断项：</div>' +
-          pre.blockers.map(b => `<div class="pcbstage"><span class="no">✗</span><span>${b.ref}：${b.reason}</span></div>`).join('');
+        html += '<div style="color:var(--warn);margin-top:6px">' + esc(tt('pcb.blockers')) + '</div>' +
+          pre.blockers.map(b => `<div class="pcbstage"><span class="no">✗</span><span>${esc(b.ref)}：${esc(trs(b.reason))}</span></div>`).join('');
       }
       if (pre.current_board_stale)
-        html += '<div style="color:#ffb27d;margin-top:6px">' + pre.current_board_reason + '</div>';
+        html += '<div style="color:#ffb27d;margin-top:6px">' + esc(trs(pre.current_board_reason)) + '</div>';
       if (!pre.tools_ready)
-        html += '<div style="color:var(--warn);margin-top:6px">' + pre.tool_hints.join('；') + '</div>';
+        html += '<div style="color:var(--warn);margin-top:6px">' + esc(pre.tool_hints.map(trs).join('；')) + '</div>';
       // 端口候选：激励源网络默认勾选；普通输出端口可从全部网络手工添加
       allNets = (pre.nets || []).filter(n => n !== 'GND');
       const newSel = new Set([...selectedPorts].filter(p => allNets.includes(p)));
@@ -82,7 +85,7 @@
       selectedPorts = newSel;
       renderPorts();
       if (pre.port_candidates.length)
-        html += '<div class="hint" style="margin-top:6px">激励源网络已自动勾选为端子；点下方网络名可增删（如输出 out）。</div>';
+        html += '<div class="hint" style="margin-top:6px">' + esc(tt('pcb.portsHint')) + '</div>';
       out.innerHTML = html;
       $('pcbRunBtn').disabled = !!pre.blockers.length;
     } catch (e) {
@@ -93,7 +96,7 @@
   function renderPorts() {
     const box = $('pcbPorts');
     box.innerHTML = allNets.map(p =>
-      `<span class="pport${selectedPorts.has(p) ? ' on' : ''}" data-p="${p}">${p}${selectedPorts.has(p) ? ' ⟶ 端子' : ''}</span>`).join('') || '';
+      `<span class="pport${selectedPorts.has(p) ? ' on' : ''}" data-p="${esc(p)}">${esc(p)}${selectedPorts.has(p) ? esc(tt('pcb.portTag')) : ''}</span>`).join('') || '';
     box.querySelectorAll('.pport').forEach(el => el.addEventListener('click', () => {
       portsTouched = true;
       const p = el.dataset.p;
@@ -121,7 +124,7 @@
       stages.push(ev);
       $('pcbJobOut').innerHTML = stages.map(s =>
         `<div class="pcbstage"><span class="${s.ok === true ? 'ok' : s.ok === false ? 'no' : ''}">` +
-        `${s.ok === true ? '✓' : s.ok === false ? '✗' : '…'}</span><span>${s.stage || s.type}${s.detail ? '：' + s.detail : ''}</span></div>`
+        `${s.ok === true ? '✓' : s.ok === false ? '✗' : '…'}</span><span>${esc(trs(s.stage || s.type || ''))}${s.detail ? '：' + esc(trs(s.detail)) : ''}</span></div>`
       ).join('');
     };
     const escJob = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -129,9 +132,9 @@
       const blockers = Array.isArray(ev.blockers) ? ev.blockers : [];
       const hints = Array.isArray(ev.tool_hints) ? ev.tool_hints : [];
       const failed = ev.ok !== true || blockers.length > 0;
-      const seconds = ev.elapsed_s != null ? '，' + ev.elapsed_s + ' 秒' : '';
-      render({ stage: failed ? '失败' : '完成', ok: !failed,
-               detail: (failed ? '未完成' : '已完成') + seconds });
+      const seconds = ev.elapsed_s != null ? tt('pcb.seconds', {s: ev.elapsed_s}) : '';
+      render({ stage: failed ? tt('pcb.jobFail') : tt('pcb.jobDone'), ok: !failed,
+               detail: (failed ? tt('pcb.jobNotDone') : tt('pcb.jobFinished')) + seconds });
       const lines = blockers.map(b => typeof b === 'string' ? b : ((b.ref ? b.ref + '：' : '') + (b.reason || ''))).concat(hints);
       if (failed && lines.some(Boolean)) {
         $('pcbJobOut').insertAdjacentHTML('beforeend', lines.filter(Boolean).map(t =>
@@ -140,7 +143,7 @@
     };
     let es = null;
     try {
-      es = new EventSource('/api/pcb/jobs/' + jid + '/events');
+      es = new EventSource('/api/pcb/jobs/' + jid + '/events?lang=' + encodeURIComponent(VPI18n.apiLang()));
       let got = false;
       es.onmessage = (m) => {
         got = true;
@@ -153,7 +156,7 @@
         } else if (ev.type === 'error') {
           es.close(); es = null;
           $('pcbCancelBtn').style.display = 'none';
-          render({ stage: '失败', ok: false, detail: ev.error });
+          render({ stage: tt('pcb.jobFail'), ok: false, detail: trs(ev.error) });
           onDone(ev);
         } else {
           render(ev);
@@ -183,7 +186,7 @@
     const out = $('pcbJobOut');
     $('pcbJobBox').style.display = '';
     $('pcbRunBtn').disabled = true;
-    out.innerHTML = '<span class="hint">任务已提交…</span>';
+    out.innerHTML = '<span class="hint">' + esc(tt('pcb.submitted')) + '</span>';
     try {
       const j = await api('/api/pcb/jobs', { use_project: true, ports: [...selectedPorts],
                                              options: boardOptions(), timeout_s: 180 });
@@ -207,17 +210,17 @@
     const box = $('pcbVerList');
     try {
       const d = await api('/api/pcb/versions');
-      if (!d.versions.length) { box.innerHTML = '<span class="hint">暂无候选版本——先「生成 PCB」。</span>'; return; }
+      if (!d.versions.length) { box.innerHTML = '<span class="hint">' + esc(tt('pcb.noVer')) + '</span>'; return; }
       box.innerHTML = d.versions.map(v => {
         const cur = d.current && d.current.version_id === v.pcb_version_id;
         return `<div class="vercard ${cur ? 'current' : ''}" data-vid="${v.pcb_version_id}">` +
           `<span class="st ${v.status === 'checked' ? 'checked' : ''}">${v.status}</span> ` +
           `<span class="hint">${v.created_at || ''} · ${v.tools ? v.tools.kicad + '/' + v.tools.freerouting : ''}</span>` +
           `<div class="row">` +
-          (cur ? '<b style="color:var(--acc)">✓ 当前采用</b>'
-               : `<button class="btn p-adopt">采用</button>`) +
-          `<button class="btn p-view">预览</button>` +
-          `<button class="btn p-export" ${v.status === 'checked' && cur ? '' : 'disabled title="仅当前采用的检查通过版本可导出"'}>导出</button>` +
+          (cur ? '<b style="color:var(--acc)">' + esc(tt('pcb.current')) + '</b>'
+               : `<button class="btn p-adopt">${esc(tt('pcb.adopt'))}</button>`) +
+          `<button class="btn p-view">${esc(tt('pcb.view'))}</button>` +
+          `<button class="btn p-export" ${v.status === 'checked' && cur ? '' : 'disabled title="' + esc(tt('pcb.exportTip')) + '"'}>${esc(tt('pcb.export'))}</button>` +
           `</div></div>`;
       }).join('');
       box.querySelectorAll('.vercard').forEach(card => {
@@ -226,8 +229,8 @@
         card.querySelector('.p-export')?.addEventListener('click', async () => {
           try {
             const e = await api('/api/pcb/export', { version_id: vid });
-            alert('制板包已就绪（' + e.files.length + ' 个文件）：\n' + e.download_dir);
-          } catch (err) { alert('导出失败：' + err.message); }
+            alert(tt('pcb.exportOk', {n: e.files.length, dir: e.download_dir}));
+          } catch (err) { alert(tt('pcb.exportFail', {msg: err.message})); }
         });
         card.querySelector('.p-adopt')?.addEventListener('click', async () => {
           try {
@@ -235,7 +238,7 @@
             await api('/api/pcb/apply', { version_id: vid,
                                           expected_revision: (d.current && d.current.revision) || 0 });
             refreshVersions();
-          } catch (err) { alert('采用失败：' + err.message); }
+          } catch (err) { alert(tt('pcb.adoptFail', {msg: err.message})); }
         });
       });
     } catch (e) { box.innerHTML = '<span class="hint" style="color:var(--warn)">' + e.message + '</span>'; }
@@ -249,16 +252,17 @@
   async function renderPreview(vid) {
     if (!vid) return;
     const cap = $('pcbViewCap');
-    cap.textContent = '加载预览…';
+    cap.textContent = tt('pcb.loading');
     try {
       const d = await api('/api/pcb/preview/' + vid);
       drawBoard(d);
-      cap.textContent = `版本 ${vid.slice(0, 15)}… · ${d.status} · 焊盘 ${d.pads.length} · ` +
-        `走线 ${d.tracks.length}（F.Cu ${d.tracks.filter(t => t.layer === 'F.Cu').length} / ` +
-        `B.Cu ${d.tracks.filter(t => t.layer === 'B.Cu').length}）· 过孔 ${d.vias.length}` +
-        ` · 板框 ${Math.round(d.bbox[2] - d.bbox[0])}×${Math.round(d.bbox[3] - d.bbox[1])}mm` +
-        `　（拖动元件可调整布局，然后「重布线」）`;
-    } catch (e) { cap.textContent = '预览失败：' + e.message; }
+      cap.textContent = tt('pcb.caption', {
+        id: vid.slice(0, 15), status: d.status, pads: d.pads.length, tracks: d.tracks.length,
+        front: d.tracks.filter(t => t.layer === 'F.Cu').length,
+        back: d.tracks.filter(t => t.layer === 'B.Cu').length,
+        vias: d.vias.length, w: Math.round(d.bbox[2] - d.bbox[0]), h: Math.round(d.bbox[3] - d.bbox[1]),
+      });
+    } catch (e) { cap.textContent = tt('pcb.previewFail', {msg: e.message}); }
   }
 
   function drawBoard(d) {
@@ -307,7 +311,7 @@
       });
       r.dataset.ref = p.ref;
       const t = el('title', {});
-      t.textContent = `${p.ref} · ${p.net}（拖动=移动整个封装）`;
+      t.textContent = tt('pcb.dragTip', {ref: p.ref, net: p.net});
       r.appendChild(t);
       (refEls[p.ref] = refEls[p.ref] || []).push(r);
       (padsByRef[p.ref] = padsByRef[p.ref] || []).push(p);
@@ -389,7 +393,7 @@
   function selectRef(ref) {
     selectedRef = ref;
     for (const r of $('pcbSelOps')?.querySelectorAll('button') || []) r.disabled = !ref;
-    $('pcbSelName').textContent = ref ? `选中：${ref}` : '';
+    $('pcbSelName').textContent = ref ? tt('pcb.selected', {ref}) : '';
   }
   $('pcbRotL')?.addEventListener('click', () => rotateSelected(-90));
   $('pcbRotR')?.addEventListener('click', () => rotateSelected(90));
@@ -399,7 +403,7 @@
       { x: view.origins[selectedRef].x, y: view.origins[selectedRef].y };
     base.lock = !base.lock;
     pendingMoves[selectedRef] = base;
-    $('pcbLockBtn').textContent = base.lock ? '🔓 解锁' : '🔒 锁定';
+    $('pcbLockBtn').textContent = base.lock ? tt('pcb.unlock') : tt('pcb.lock');
     updateToolbar();
   });
   function rotateSelected(deg) {
@@ -428,7 +432,7 @@
           if (p.net === highlightedNet)
             view.refEls[rref][i].setAttribute('stroke', '#ff5f7e');
         });
-      $('pcbViewCap').textContent += `　◆ 高亮网络 ${highlightedNet}（点空白取消）`;
+      $('pcbViewCap').textContent += tt('pcb.highlight', {net: highlightedNet});
     }
   }
   svg.addEventListener('click', (e) => {
@@ -440,22 +444,22 @@
     const bar = $('pcbAdjustBar');
     const n = Object.keys(pendingMoves).length;
     bar.style.display = (n || selectedRef) ? 'flex' : 'none';
-    $('pcbAdjustCount').textContent = `已调整 ${n} 处`;
+    $('pcbAdjustCount').textContent = tt('pcb.moved', {n});
   }
 
   async function rerouteWithMoves() {
     if (!view || !Object.keys(pendingMoves).length) return;
     const out = $('pcbJobOut');
     $('pcbJobBox').style.display = '';
-    out.innerHTML = '<span class="hint">按新布局重布线中（清旧走线 → 移动封装 → 布线 → 检查）…</span>';
+    out.innerHTML = '<span class="hint">' + esc(tt('pcb.rerouting')) + '</span>';
     $('pcbRerouteBtn').disabled = true;
     try {
       const res = await api(`/api/pcb/versions/${view.vid}/placement`, { moves: pendingMoves }, 'PUT');
       const rows = (res.stages || []).map(s =>
         `<div class="pcbstage"><span class="${s.ok ? 'ok' : 'no'}">${s.ok ? '✓' : '✗'}</span>` +
-        `<span>${s.stage}${s.detail ? '：' + s.detail : ''}</span></div>`).join('') +
-        (res.blockers || []).map(b => `<div class="pcbstage"><span class="no">✗</span><span>${b}</span></div>`).join('');
-      out.innerHTML = rows + `<div class="hint">状态 ${res.state}${res.elapsed_s != null ? '，' + res.elapsed_s + 's' : ''}</div>`;
+        `<span>${esc(trs(s.stage))}${s.detail ? '：' + esc(trs(s.detail)) : ''}</span></div>`).join('') +
+        (res.blockers || []).map(b => `<div class="pcbstage"><span class="no">✗</span><span>${esc(trs(b))}</span></div>`).join('');
+      out.innerHTML = rows + `<div class="hint">${esc(tt('pcb.stateLine', {state: res.state, extra: res.elapsed_s != null ? '，' + res.elapsed_s + 's' : ''}))}</div>`;
       if (res.ok) {
         pendingMoves = {};
         updateToolbar();
@@ -477,6 +481,15 @@
   $('pcbAdjustResetBtn').addEventListener('click', () => {
     pendingMoves = {};
     if (view) renderPreview(view.vid);
+  });
+
+  document.addEventListener('vp-lang', () => {
+    if (!inited) return;
+    refreshCaps();
+    refreshVersions();
+    if (pre) doPreflight();
+    updateToolbar();
+    if (selectedRef) selectRef(selectedRef);
   });
 
   window.VPPcb = { setVisible };

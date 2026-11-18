@@ -19,7 +19,7 @@ import json
 from functools import lru_cache
 from pathlib import Path
 
-from .. import specs
+from .. import i18n, specs
 from ..circuit_ir import netlist_to_ir
 from . import kicad_backend, placement
 
@@ -50,8 +50,9 @@ def resolve_entry(kind: str, value: str, mount: str = "tht") -> tuple[dict | Non
         alt = "smd" if mount == "tht" else "tht"
         has_alt = any(e["match"].get("kind") == kind
                       for e in load_catalog()["entries"])
-        hint = f"（{kind} 无 {mount} 条目" + ("，可换安装方式" if has_alt else "）")
-        return None, f"类型 {kind} 在 {mount} 安装方式下无审校条目{hint}"
+        if has_alt:
+            return None, i18n.t("api.block.entry_alt", kind=kind, mount=mount)
+        return None, i18n.t("api.block.entry_none", kind=kind, mount=mount)
     text = str(value).lower()
     farads = _parse_value(value) if kind == "C" else None
     # 先试带条件的条目（型号关键字 / 容值阈值），命中多条时取条件最严的
@@ -68,7 +69,7 @@ def resolve_entry(kind: str, value: str, mount: str = "tht") -> tuple[dict | Non
     for e in entries:
         if not e["match"].get("model_contains") and "min_value_farads" not in e["match"]:
             return e, ""
-    return None, f"{kind} 型号/值 {value!r} 未匹配审校条目（不按类别猜测脚位）"
+    return None, i18n.t("api.block.value", kind=kind, value=repr(value))
 
 
 def _pads_for(entry: dict, nets: list[str]) -> list[str]:
@@ -98,9 +99,7 @@ def map_ir(ir: dict, ports: list[str], options: dict | None = None) -> dict:
     declared = {netlist_alias(net) for net in ports}
     for net in ir["port_candidates"]:
         if net not in declared:
-            blockers.append({"ref": net, "reason":
-                             "激励源的网络未声明外部端子（ports）——信号源不是实物器件，"
-                             "必须经端子/连接器进出板子（PCB 方案 §4.2）"})
+            blockers.append({"ref": net, "reason": i18n.t("api.block.ports")})
     report["blocked"] = blockers
     report["net_renames"] = ir["net_renames"]
 
@@ -114,8 +113,7 @@ def map_ir(ir: dict, ports: list[str], options: dict | None = None) -> dict:
             continue
         if len(el["nets"]) != len(entry["spice_pin_order"]):
             blockers.append({"ref": el["ref"], "reason":
-                             f"网表引脚数 {len(el['nets'])} ≠ 实物 {el['part']} 的 "
-                             f"{len(entry['spice_pin_order'])} 脚（引脚序不齐不可猜）"})
+                             i18n.t("api.block.pins", nets=len(el["nets"]), part=el["part"], pins=len(entry["spice_pin_order"]))})
             continue
         pads = _pads_for(entry, el["nets"])
         components.append({"ref": el["ref"], "part": entry["id"],
@@ -129,10 +127,10 @@ def map_ir(ir: dict, ports: list[str], options: dict | None = None) -> dict:
                             for i, pad in enumerate(sorted(entry["pad_functions"], key=int))},
                 "notes": [entry["notes"]] if entry["notes"] else []}
         if entry["polarized"]:
-            item["notes"].append("有极性：装配前人工复核丝印/极性标记")
+            item["notes"].append(i18n.t("api.block.polar"))
         if any(k in str(el["value"]).lower()
                for k in ("qnpn", "qpnp", "dmod")):
-            item["notes"].append("教学模型→实物型号映射：额定参数须按实物核对")
+            item["notes"].append(i18n.t("api.block.teach"))
         report["mapped"].append(item)
 
     if blockers:

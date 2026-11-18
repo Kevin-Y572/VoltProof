@@ -13,6 +13,7 @@ import threading
 import time
 from pathlib import Path
 
+from .. import i18n
 from ..project import Conflict  # 与主项目同一冲突语义，前端提示一致
 from . import schema
 
@@ -96,24 +97,23 @@ def adopt(ws, version_id: str, expected_revision: int | None = None,
     """
     version = get_version(ws, version_id)
     if version is None:
-        raise ValueError(f"候选版本不存在：{version_id}")
+        raise ValueError(i18n.t("api.pcb_candidate_missing", id=version_id))
     if require_fresh_source and version.get("status") not in (schema.CHECKED,):
-        raise Conflict(f"候选状态为 {version.get('status')}，仅检查通过的版本可被采用")
+        raise Conflict(i18n.t("api.pcb_status", status=version.get("status")))
     if require_fresh_source:
         from .. import project as _project
         try:
             now_netlist = _project.active_netlist(ws.load_project(), verified=True)
         except ValueError as e:
-            raise Conflict(f"无法确认源电路（{e}）——请先在画布完成验证再采用") from e
+            raise Conflict(i18n.t("api.pcb_source", msg=e)) from e
         if now_netlist.strip() and schema.electrical_hash(now_netlist) != \
                 version.get("source_netlist_hash"):
-            raise Conflict("源电路电气内容已变化：该候选是旧电路的板，"
-                           "不可采用为当前电路的制板结果（可导出为历史版本）")
+            raise Conflict(i18n.t("api.pcb_stale_adopt"))
     with _lock(ws):
         cur = current(ws)
         revision = (cur or {}).get("revision", 0) + 1
         if expected_revision is not None and (cur or {}).get("revision", 0) != expected_revision:
-            raise Conflict("当前板指针已被其他操作更新，请重新载入后再采用")
+            raise Conflict(i18n.t("api.pcb_pointer"))
         pointer = {"version_id": version_id, "revision": revision,
                    "adopted_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
         _atomic_write(ws.cp_dir / "pcb_current.json", pointer)
@@ -134,13 +134,12 @@ def is_stale(ws, netlist_now: str) -> dict:
     """当前采用的板对现在的源电路是否过期（电气内容哈希口径）。"""
     cur = current(ws)
     if cur is None:
-        return {"stale": False, "reason": "尚未采用任何 PCB 版本"}
+        return {"stale": False, "reason": i18n.t("api.pcb_stale_none")}
     version = get_version(ws, cur["version_id"])
     if version is None:
-        return {"stale": True, "reason": "当前版本记录文件缺失（被移动/删除）"}
+        return {"stale": True, "reason": i18n.t("api.pcb_stale_file")}
     now_hash = schema.electrical_hash(netlist_now)
     if now_hash != version.get("source_netlist_hash"):
-        return {"stale": True, "reason":
-                "源电路电气内容已变化——旧板仍是有效历史版本，但不可冒充当前电路的制板结果",
+        return {"stale": True, "reason": i18n.t("api.pcb_stale_hash"),
                 "pcb_version_id": cur["version_id"]}
-    return {"stale": False, "reason": "电气内容一致", "pcb_version_id": cur["version_id"]}
+    return {"stale": False, "reason": i18n.t("api.pcb_fresh"), "pcb_version_id": cur["version_id"]}

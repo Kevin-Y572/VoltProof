@@ -15,6 +15,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from . import i18n
+
 # CIDER 数值器件模型类型（官方示例实测收集：examples/cider 下 nbjt/numos/numd）。
 # 标准 ngspice-47 Windows 构建未编译 CIDER 支持且无任何报错——子进程直接
 # 挂死到超时（实测 60s+ 无输出），必须在仿真前静态拦下
@@ -140,15 +142,15 @@ def run_checks(netlist_text: str) -> CheckResult:
         kind = line.split()[0][0].upper()
         for tok in value_tokens(line):
             if re.fullmatch(r"\d+(\.\d+)?M", tok):
-                result.fail(f"第 {lineno} 行：'{tok}' 的 M 会按毫处理——兆必须写 Meg 或 1000k")
+                result.fail(i18n.t_zh("api.check.mega", lineno=lineno, tok=tok))
             if kind in "RCL" and tok.rstrip("Ff") in ("0", "0.0"):
-                result.fail(f"第 {lineno} 行：{kind} 元件值为 0，通常是笔误（0Ω/0F 无意义）")
+                result.fail(i18n.t_zh("api.check.zero", lineno=lineno, kind=kind))
 
         # 模型引用检查
         if kind in "QDM":
             m = _model_ref(line)
             if m is None:
-                result.fail(f"第 {lineno} 行：{kind} 元件没有写模型名（应引用 .model 定义）")
+                result.fail(i18n.t_zh("api.check.model_name", lineno=lineno, kind=kind))
             else:
                 used_models[m] = lineno
 
@@ -157,27 +159,23 @@ def run_checks(netlist_text: str) -> CheckResult:
         if s.lower().startswith(".model"):
             parts = s.split()
             if len(parts) >= 3 and parts[2].lower() in _CIDER_MODEL_TYPES:
-                result.fail(
-                    f"模型 '{parts[1]}' 的类型 {parts[2].upper()} 是 CIDER 数值器件模型，"
-                    "当前 ngspice 构建不支持（实测无任何输出直接挂死）——"
-                    "请改用标准 SPICE compact 模型（NPN/PNP/NMOS/D 等 + .model 参数）"
-                    "或等效子电路实现")
+                result.fail(i18n.t_zh("api.check.cider", name=parts[1], kind=parts[2].upper()))
             if len(parts) >= 2:
                 defined_models.add(parts[1].lower())
         # .include/.lib 引入的模型静态检查无法解析，跳过
 
     # 1. 缺地
     if "0" not in node_count and "gnd" not in {n.lower() for n in node_count}:
-        result.fail("网表没有参考地（节点 0）——所有电压/电流都失去参考。")
+        result.fail(i18n.t_zh("api.check.ground"))
 
     # 2. 浮空节点（出现次数 = 1 的节点；地除外）
     for n, c in node_count.items():
         if c < 2 and n not in ("0",) and n.lower() != "gnd":
-            result.fail(f"节点 {n} 只被一个元件引用，疑似浮空（悬空节点会导致 singular matrix）。")
+            result.fail(i18n.t_zh("api.check.float", n=n))
 
     # 3. 缺模型
     for m, lineno in used_models.items():
         if m.lower() not in defined_models:
-            result.fail(f"第 {lineno} 行：元件引用了模型 '{m}'，但没有对应的 .model 定义或 .include。")
+            result.fail(i18n.t_zh("api.check.missing_model", lineno=lineno, model=m))
 
     return result

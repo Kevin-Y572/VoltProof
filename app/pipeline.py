@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
-from . import checks, llm, measure, prompts, specs, project
+from . import checks, i18n, llm, measure, prompts, specs, project
 from .ngspice_runner import run_netlist
 from .render_schematic import render_schematic
 from .render_wave import render_wave
@@ -120,9 +120,9 @@ def _domain_guard(request: str) -> Evidence | None:
         return None
     return Evidence(
         request=request, ok=False, rejected=True, elapsed=0.0,
-        interpretation=_GUARD_INTERP,
+        interpretation=i18n.t("api.guard.text"),
         retry_log=[{"round": 0, "stage": "guard",
-                    "problems": ["数字逻辑/RTL 需求，已前置拒绝（未调用生成与仿真）"]}],
+                    "problems": [i18n.t("api.guard")]}],
     )
 
 
@@ -185,7 +185,7 @@ def iter_pipeline_events(request: str, previous_netlist: str | None = None,
     if guard is not None:
         guard.source = source or "chat"
         yield {"type": "stage", "round": 0, "stage": "guard",
-               "problems": ["数字逻辑/RTL 需求，已前置拒绝（未调用生成与仿真）"]}
+               "problems": [i18n.t("api.guard")]}
         return guard
 
     # 结果缓存：相同请求（无验收器）直接返回完整证据——演示防翻车
@@ -613,12 +613,12 @@ def chat_with_conversation_events(conversation_id: str | None, message: str,
     proj = ws.load_project()
     base_revision = project.revision(proj)
     if expected_revision is not None and expected_revision != base_revision:
-        yield {"type": "error", "error": "项目已更新，请重新载入后发送"}
+        yield {"type": "error", "error": i18n.t("api.chat_stale")}
         return
     attached_netlist = None
     if attachment and attachment.get("content"):
         if len(attachment["content"]) > 256 * 1024:
-            yield {"type": "error", "error": "附件超过 256KB 限制"}
+            yield {"type": "error", "error": i18n.t("api.attach_big")}
             return
         if _looks_like_netlist(attachment.get("filename", ""), attachment["content"]):
             attached_netlist = attachment["content"]
@@ -626,7 +626,7 @@ def chat_with_conversation_events(conversation_id: str | None, message: str,
             message = f"{message}\n\n[附件 {attachment.get('filename', '')} 的内容]\n{attachment['content'][:4000]}"
     current_netlist = attached_netlist or project.active_netlist(proj)
     if proj.get("dirty") and not current_netlist and (proj.get("canvas") or {}).get("comps"):
-        yield {"type":"error", "error":"当前画布尚未生成可用网表，请先仿真或从画布发送 AI 修改"}
+        yield {"type":"error", "error": i18n.t("api.no_netlist")}
         return
     action = specs.classify(message, bool(current_netlist), bool(attached_netlist))
     inherited = proj.get("requirements", []) if action != "design" or proj.get("requirements_pending") else []
@@ -734,7 +734,7 @@ def chat_with_conversation(conversation_id: str | None, message: str,
             d = {k: v for k, v in ev.items() if k != "type"}
         elif ev.get("type") == "error":
             d = ev
-    return d or {"error": "管线无响应"}
+    return d or {"error": i18n.t("api.pipe_silent")}
 
 
 def _looks_like_netlist(filename: str, content: str) -> bool:

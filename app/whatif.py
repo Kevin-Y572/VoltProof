@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import measure
+from . import i18n, measure
 from .ngspice_runner import run_netlist
 from .tuner import _fmt
 
@@ -98,14 +98,14 @@ def run_scan(netlist: str, component: str, values: list[str], metric: str,
     """对 component 逐个取 values 里的值真实仿真，返回逐点结果 + 曲线族 PNG。"""
     comp = next((c for c in scan_components(netlist) if c["name"] == component), None)
     if comp is None:
-        return {"error": f"网表里没有可扫描的元件 '{component}'（只支持 R/C/L 与直流源）"}
+        return {"error": i18n.t("api.whatif_missing", name=component)}
     if metric not in METRIC_NAMES:
-        return {"error": f"未知指标 '{metric}'"}
+        return {"error": i18n.t("api.whatif_metric", metric=metric)}
     values = [str(v).strip() for v in values if str(v).strip()][:max_points]
     if not values:
-        return {"error": "扫描值列表为空"}
+        return {"error": i18n.t("api.whatif_empty")}
     if any(not _is_plain_number(v) for v in values):
-        return {"error": "扫描值必须是单个 SPICE 数值，如 1k、47n；不能包含表达式或命令"}
+        return {"error": i18n.t("api.whatif_value")}
     workdir = workdir or Path(".voltproof_whatif")
     workdir.mkdir(parents=True, exist_ok=True)
 
@@ -117,13 +117,13 @@ def run_scan(netlist: str, component: str, values: list[str], metric: str,
         sim = run_netlist(nl, workdir=workdir / f"point-{index + 1}")
         if not sim.ok or sim.raw_path is None:
             points.append({"value": v, "ok": False,
-                           "error": (sim.error_snippet or "仿真失败")[:160]})
+                           "error": (sim.error_snippet or i18n.t("api.sim_fail"))[:160]})
             continue
         try:
             tr = measure.load_traces(sim.raw_path)
             measure.validate_traces(tr)
         except Exception as e:
-            points.append({"value": v, "ok": False, "error": f"解析失败: {e}"})
+            points.append({"value": v, "ok": False, "error": i18n.t("api.parse_fail", msg=e)})
             continue
         val, err = measure.compute_metric(tr, metric, out_frag, in_frag, netlist=nl)
         if val is None:
@@ -142,7 +142,7 @@ def run_scan(netlist: str, component: str, values: list[str], metric: str,
                        analysis=tr.analysis if curves else "unknown")
     out = {"component": component, "metric": metric,
            "metric_name": METRIC_NAMES[metric], "points": points,
-           "note": "瞬态去除前20%时间暂态；扫描基于固定电路版本。候选方案应用前需确认。"}
+           "note": i18n.t("api.whatif_note")}
     if png:
         out["png_b64"] = base64.b64encode(png.read_bytes()).decode()
     return out
@@ -172,7 +172,7 @@ def _plot_family(curves, metric: str, out_frag: str, comp: str, workdir: Path, a
         ax.set_xlabel("time (s)" if curves[0][1] is not None else "sample")
     ax.set_ylabel(out_frag)
     ax.grid(True, alpha=0.3, which="both")
-    ax.set_title(f"what-if：{comp} 扫描（{METRIC_NAMES.get(metric, metric)}）", fontsize=10)
+    ax.set_title(i18n.t("api.whatif_title", comp=comp, metric=METRIC_NAMES.get(metric, metric)), fontsize=10)
     ax.legend(title=comp, loc="best", fontsize=7.5, title_fontsize=8)
     fig.tight_layout()
     out_png = workdir / "whatif.png"

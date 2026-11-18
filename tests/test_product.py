@@ -578,5 +578,59 @@ if (context.VPProof.resultClass({ errors: [], stamp: "edited", verifiedStamp: "s
         self.assertEqual(body["port_candidates"], ["in"])
 
 
+class LocaleTest(unittest.TestCase):
+    """界面语言：默认中文，不跟浏览器语言列表，显式选择后接口文案跟着变。"""
+
+    def test_api_language_is_explicit(self):
+        from fastapi.testclient import TestClient
+        from app import i18n, main
+        with TestClient(main.app) as client:
+            chinese = client.post("/api/ws/open", json={"path": ""})
+            english = client.post("/api/ws/open", json={"path": ""}, headers={"X-VP-Lang": "en", "Accept-Language": "en"})
+            browser = client.post("/api/ws/open", json={"path": ""}, headers={"Accept-Language": "en-US,en;q=0.9"})
+            query = client.post("/api/ws/open?lang=en", json={"path": " "})
+        self.assertEqual(chinese.json()["error"], "path 不能为空")
+        self.assertEqual(chinese.headers["content-language"], "zh-CN")
+        self.assertEqual(english.json()["error"], "Path cannot be empty")
+        self.assertEqual(english.headers["content-language"], "en")
+        self.assertEqual(browser.json()["error"], "path 不能为空")
+        self.assertIn("Path cannot be empty", query.json()["error"])
+        self.assertEqual(i18n.negotiate("en-US,en;q=0.9"), "zh-CN")
+        self.assertEqual(i18n.negotiate("en"), "en")
+        self.assertEqual(i18n.current(), "zh-CN")
+
+    def test_known_server_phrases_translate_both_ways(self):
+        from app import i18n
+        token = i18n.use("en")
+        try:
+            self.assertEqual(i18n.translate("对话不存在"), "Chat not found")
+            self.assertIn("ground", i18n.translate("网表没有参考地（节点 0）——所有电压/电流都失去参考。").lower())
+            self.assertIn("Pass", i18n.t("verdict.passed"))
+            self.assertNotIn("达标", i18n.t("check.pass"))
+        finally:
+            i18n.reset(token)
+        self.assertEqual(i18n.translate("Chat not found"), "对话不存在")
+        self.assertEqual(i18n.t("verdict.passed"), "✓ 指标达标")
+
+    def test_pages_offer_both_languages_and_do_not_follow_the_browser(self):
+        import json
+        from pathlib import Path
+        from fastapi.testclient import TestClient
+        from app import main
+        root = Path(__file__).resolve().parent.parent / "app" / "static"
+        catalog = json.loads((root / "messages.json").read_text(encoding="utf-8"))
+        self.assertTrue(all(item.get("zh-CN") and item.get("en") for item in catalog.values()))
+        script = (root / "i18n.js").read_text(encoding="utf-8")
+        self.assertIn('let lang = "zh-CN"', script)
+        self.assertIn("vp_lang", script)
+        self.assertNotIn("navigator.language", script)
+        with TestClient(main.app) as client:
+            for path in ("/", "/draw.html", "/compare.html"):
+                page = client.get(path).text
+                self.assertIn('data-set-lang="zh-CN"', page)
+                self.assertIn('data-set-lang="en"', page)
+                self.assertIn("i18n.js", page)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

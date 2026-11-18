@@ -5,7 +5,7 @@ import copy
 import math
 import re
 
-from . import measure
+from . import i18n, measure
 
 VERSION = "specs-1"
 NAMES = {"fc": "截止频率", "freq": "主频", "gain": "增益", "vpp": "峰峰值",
@@ -21,36 +21,36 @@ OPS = r"(?:不超过|不大于|不高于|小于等于|不低于|不小于|至少
 def number(text: str) -> float:
     m = re.fullmatch(rf"\s*({NUMBER})\s*(Meg|meg|[kKmMuUnNpPμµ]?)\s*", text)
     if not m:
-        raise ValueError(f"数值格式非法：{text}")
+        raise ValueError(i18n.t("api.spec_number", text=text))
     factors = {"": 1, "k": 1e3, "K": 1e3, "M": 1e6, "Meg": 1e6, "meg": 1e6,
                "m": 1e-3, "u": 1e-6, "U": 1e-6, "μ": 1e-6, "µ": 1e-6,
                "n": 1e-9, "N": 1e-9, "p": 1e-12, "P": 1e-12}
     value = float(m[1]) * factors[m[2]]
     if not math.isfinite(value):
-        raise ValueError("数值必须有限")
+        raise ValueError(i18n.t("api.spec_finite"))
     return value
 
 
 def normalize(specs: list[dict]) -> list[dict]:
     if not isinstance(specs, list) or len(specs) > 24:
-        raise ValueError("验收条件必须为数组，最多 24 项")
+        raise ValueError(i18n.t("api.spec_array"))
     result = []
     def numeric(value):
         try:
             return float(value)
         except (ValueError, TypeError, OverflowError) as e:
-            raise ValueError("验收目标、容差和时间窗口必须是数值") from e
+            raise ValueError(i18n.t("api.spec_numeric")) from e
     for raw in specs:
         if not isinstance(raw, dict):
-            raise ValueError("验收条件必须为对象")
+            raise ValueError(i18n.t("api.spec_object"))
         metric = str(raw.get("metric", ""))[:40]
         op = str(raw.get("op", "near"))
         if op not in ("near", "lt", "le", "gt", "ge", "range"):
-            raise ValueError("不支持的比较方式")
+            raise ValueError(i18n.t("api.spec_op"))
         target = numeric(raw.get("target", 0))
         tol = numeric(raw.get("tol", 0.05))
         if not math.isfinite(target) or not math.isfinite(tol) or not 0 <= tol <= 1:
-            raise ValueError("目标必须有限，相对容差必须在 0–1 之间")
+            raise ValueError(i18n.t("api.spec_tol"))
         spec = {"metric": metric, "op": op, "target": target, "tol": tol,
                 "name": str(raw.get("name") or NAMES.get(metric, metric))[:100],
                 "unit": str(raw.get("unit") or UNITS.get(metric, ""))[:16],
@@ -62,13 +62,13 @@ def normalize(specs: list[dict]) -> list[dict]:
         if raw.get("component"):
             spec["component"] = str(raw["component"])[:32]
         if spec["filter_type"] not in ("lowpass","highpass"):
-            raise ValueError("截止频率目前支持 lowpass / highpass；其他滤波器需要专用验收设置")
+            raise ValueError(i18n.t("api.spec_filter"))
         if not math.isfinite(spec["skip"]) or not 0 <= spec["skip"] < 0.95:
-            raise ValueError("去暂态比例必须在 0–0.95 之间")
+            raise ValueError(i18n.t("api.spec_skip"))
         if op == "range":
             spec["upper"] = numeric(raw.get("upper"))
             if not math.isfinite(spec["upper"]) or spec["upper"] < target:
-                raise ValueError("验收上限必须有限且不小于下限")
+                raise ValueError(i18n.t("api.spec_upper"))
         result.append(spec)
     return result
 
@@ -209,14 +209,14 @@ def evaluate(traces, specs: list[dict], netlist: str = "") -> list[dict]:
                     values.append(_spice_val(token))
                 except (ValueError, IndexError, KeyError):
                     values.append(None)
-            value,error=(values[0],"") if len(values)==1 and values[0] is not None else (None,"元件不存在、重复或不是字面量数值")
+            value,error=(values[0],"") if len(values)==1 and values[0] is not None else (None, i18n.t_zh("api.spec_comp"))
         else:
             value, error = measure.compute_metric(traces, spec["metric"], spec["out"], spec["in"],
                                               netlist=netlist, exact=spec.get("explicit_nodes", False),
                                               skip=spec["skip"], filter_type=spec["filter_type"],
                                               signed=spec["metric"] == "gain" and spec["target"] < 0)
         if value is not None and not math.isfinite(value):
-            value, error = None, "测量结果不是有限值"
+            value, error = None, i18n.t_zh("api.spec_nonfinite")
         target, op = spec["target"], spec["op"]
         ok = None
         if value is not None:
@@ -225,12 +225,21 @@ def evaluate(traces, specs: list[dict], netlist: str = "") -> list[dict]:
                   "gt": lambda: value > target, "ge": lambda: value >= target,
                   "range": lambda: target <= value <= spec["upper"]}[op]()
         label = target_label(spec)
+        if spec["metric"] == "component_value":
+            window_key, window = "component", i18n.t_zh("window.component")
+        elif traces and traces.analysis == "tran":
+            window_key, window = "tran", i18n.t_zh("window.tran", pct=f"{spec['skip']:.0%}".rstrip("%"))
+        else:
+            window_key, window = "full", i18n.t_zh("window.full")
+        kind = i18n.t_zh("detail.kind.netlist") if spec["metric"] == "component_value" else i18n.t_zh("detail.kind.measured")
+        detail = error if value is None else i18n.t_zh("detail.line", kind=kind, value=f"{value:.6g}", unit=spec["unit"], target=label)
         checks.append({"name": spec["name"], "metric": spec["metric"], "ok": ok,
                        "status": "unverified" if ok is None else ("passed" if ok else "failed"),
                        "target": target, "target_label": label, "measured": value,
                        "unit": spec["unit"], "out": spec["out"], "in": spec["in"],
-                       "window": "网表参数检查" if spec["metric"]=="component_value" else (f"按时间去除前 {spec['skip']:.0%} 暂态" if traces and traces.analysis == "tran" else "全部分析范围"),
-                       "detail": error if value is None else f"{'网表值' if spec['metric']=='component_value' else '实测'} {value:.6g} {spec['unit']}；目标 {label}"})
+                       "window_key": window_key, "skip": spec["skip"],
+                       "component": spec.get("component", ""),
+                       "window": window, "detail": detail})
     return checks
 
 
