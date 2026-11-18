@@ -59,6 +59,8 @@ from urllib.parse import urlparse
 import openai
 from openai import OpenAI
 
+from . import i18n
+
 _BASE_URL = os.environ.get("VOLTPROOF_BASE_URL", "https://api.deepseek.com")
 _MODEL = os.environ.get("VOLTPROOF_MODEL", "deepseek-flash")
 _API_KEY = (os.environ.get("VOLTPROOF_API_KEY")
@@ -100,8 +102,7 @@ def _get_client() -> OpenAI:
     global _client
     if _client is None:
         if not _API_KEY:
-            raise RuntimeError("缺少 API Key：请在前端页面「设置」里填写，"
-                               "或设置 VOLTPROOF_API_KEY 环境变量")
+            raise RuntimeError(i18n.t("api.llm.no_key"))
         validate_base_url(_BASE_URL)
         # SDK 的 max_retries 覆盖超时/断连/429/5xx，指数退避并尊重 Retry-After，
         # 官方错误码页对 429/500/503 的建议（稍后重试）由它承担
@@ -188,14 +189,16 @@ def _build_kwargs(system: str, user: str, temperature: float,
 def _translate_api_error(e: Exception) -> Exception:
     """按官方错误码表把 SDK 异常翻译成带解释的 LLMError。"""
     if isinstance(e, openai.APITimeoutError):
-        return LLMError(f"请求超时（>{_TIMEOUT:.0f}s，SDK 已自动重试 {_RETRIES} 次）；"
-                        f"长思考任务可调大 VOLTPROOF_LLM_TIMEOUT")
+        return LLMError(i18n.t("api.llm.timeout", timeout=f"{_TIMEOUT:.0f}", retries=_RETRIES))
     if isinstance(e, openai.APIConnectionError):
-        return LLMError(f"无法连接 {_BASE_URL}（SDK 已自动重试 {_RETRIES} 次）：{e}")
+        return LLMError(i18n.t("api.llm.connect", url=_BASE_URL, retries=_RETRIES, msg=e))
     if isinstance(e, openai.APIStatusError):
         code = getattr(e, "status_code", None) or 0
-        hint = _ERROR_HINTS.get(code, f"接口返回 HTTP {code}")
-        return LLMError(f"{hint}；原始信息：{getattr(e, 'message', e)}")
+        hint_key = f"api.llm.{code}"
+        hint = i18n.t(hint_key)
+        if hint == hint_key:
+            hint = i18n.t("api.llm.http", code=code)
+        return LLMError(i18n.t("api.llm.raw", hint=hint, msg=getattr(e, "message", e)))
     return e
 
 
@@ -242,19 +245,18 @@ def validate_base_url(url: str) -> None:
     环回、私有、保留地址（DNS 解析后逐 IP 检查）。不合规抛 LLMError。"""
     p = urlparse(url if "//" in url else f"//{url}")
     if p.scheme not in ("http", "https"):
-        raise LLMError(f"Base URL 只允许 http/https 协议：{url!r}")
+        raise LLMError(i18n.t("api.llm.scheme", url=repr(url)))
     host = p.hostname
     if not host:
-        raise LLMError(f"Base URL 缺少主机名：{url!r}")
+        raise LLMError(i18n.t("api.llm.host", url=repr(url)))
     if _env_flag("VOLTPROOF_ALLOW_PRIVATE_LLM", False):
         return  # 机主显式豁免：本机 Ollama/LM Studio 等私有部署
     if host.lower() == "localhost" or host.lower().endswith(".localhost"):
-        raise LLMError("不允许 localhost 供应商地址；本机模型服务"
-                       "（Ollama/LM Studio）请设置 VOLTPROOF_ALLOW_PRIVATE_LLM=1")
+        raise LLMError(i18n.t("api.llm.loop"))
     try:
         infos = socket.getaddrinfo(host, None)
     except socket.gaierror:
-        raise LLMError(f"无法解析供应商主机名：{host}")
+        raise LLMError(i18n.t("api.llm.dns", host=host))
     for info in infos:
         raw = info[4][0].split("%")[0]  # 去掉 IPv6 scope id
         try:
@@ -263,8 +265,7 @@ def validate_base_url(url: str) -> None:
             continue
         if (ip.is_loopback or ip.is_private or ip.is_reserved
                 or ip.is_link_local or ip.is_multicast or ip.is_unspecified):
-            raise LLMError(f"供应商主机 {host} 解析到内网/保留地址 {ip}，已拒绝；"
-                           "本机模型服务请设置 VOLTPROOF_ALLOW_PRIVATE_LLM=1")
+            raise LLMError(i18n.t("api.llm.private", host=host, ip=ip))
 
 
 def current_config() -> dict:
@@ -311,7 +312,7 @@ def list_models(base_url: str | None = None, api_key: str | None = None,
     url = (base_url or _BASE_URL).strip().rstrip("/")
     key = (api_key or "").strip() or _API_KEY
     if not key:
-        raise LLMError("缺少 API Key，无法查询模型列表")
+        raise LLMError(i18n.t("api.llm.no_key_list"))
     validate_base_url(url)
     try:
         c = OpenAI(api_key=key, base_url=url, timeout=timeout, max_retries=1)
@@ -385,10 +386,9 @@ def chat_json(system: str, user: str, *, max_tokens: int | None = None,
         if text.strip():
             break
     if not text.strip():
-        raise LLMError("JSON 模式连续返回空 content（官方已知问题），请调整 prompt 重试")
+        raise LLMError(i18n.t("api.llm.json_empty"))
     if last_finish_reason == "length":
-        raise LLMError("JSON 输出被 max_tokens 截断（finish_reason=length），"
-                       "请调大 max_tokens 或精简输出要求")
+        raise LLMError(i18n.t("api.llm.truncated"))
     try:
         return json.loads(text)
     except json.JSONDecodeError:
@@ -398,7 +398,7 @@ def chat_json(system: str, user: str, *, max_tokens: int | None = None,
                 return json.loads(text[start:end + 1])
             except json.JSONDecodeError:
                 pass
-        raise LLMError(f"JSON 解析失败，前 200 字符：{text[:200]!r}")
+        raise LLMError(i18n.t("api.llm.json_bad", text=repr(text[:200])))
 
 
 def chat_stream(system: str, user: str, temperature: float = 0.2, *,

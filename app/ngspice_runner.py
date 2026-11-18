@@ -20,6 +20,8 @@ from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import i18n
+
 
 def _resolve_ngspice() -> str:
     """ngspice 可执行文件定位：环境变量 > PATH > 便携包自带（<包根>/ngspice/bin）。
@@ -74,12 +76,11 @@ def check_netlist_safety(netlist_text: str) -> list[str]:
             in_control = False
             continue
         if in_control and _CTRL_DANGER.match(s):
-            problems.append(f"被禁止的系统命令：'{s.split()[0]}'（.control 内不允许执行系统命令）")
+            problems.append(i18n.t_zh("api.safe.shell", cmd=s.split()[0]))
         if in_control and _CTRL_EXTERNAL.match(s):
-            problems.append(f"被禁止的外部程序调用：'{s.split()[0]}'"
-                            "（.control 内不允许启动 gnuplot/编辑器等外部程序）")
+            problems.append(i18n.t_zh("api.safe.ext", cmd=s.split()[0]))
         if _BAD_INCLUDE.match(s):
-            problems.append(f".include/.lib 只允许相对路径：'{s}'")
+            problems.append(i18n.t_zh("api.safe.path", line=s))
     return problems
 
 # 日志/stdout 里出现即判失败的标记（ngspice 手册 + 实测归纳）

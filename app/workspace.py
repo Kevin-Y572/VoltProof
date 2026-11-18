@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 import os
+
+from . import i18n
 import re
 import time
 import uuid
@@ -37,7 +39,7 @@ class Workspace:
     def __init__(self, root: str | Path):
         root = Path(root)
         if not root.is_absolute():
-            raise WorkspaceError(f"工作区必须是绝对路径：{root}")
+            raise WorkspaceError(i18n.t("api.ws_abs", root=root))
         self.root = root.resolve()
 
     # ------------------------------------------------------------------
@@ -53,7 +55,7 @@ class Workspace:
         candidate = (p if p.is_absolute() else self.root / p).resolve()
         if self._inside(candidate):
             return candidate
-        raise PermissionError(f"路径越界（必须位于工作区内）：{rel}")
+        raise PermissionError(i18n.t("api.ws_escape", rel=rel))
 
     def _inside(self, p: Path) -> bool:
         nc_root = os.path.normcase(str(self.root))

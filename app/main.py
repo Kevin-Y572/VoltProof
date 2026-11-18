@@ -30,14 +30,26 @@ import threading
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import llm, pipeline, project, specs
+from . import i18n, llm, pipeline, project, specs
 from .workspace import Workspace, WorkspaceError, default_workspace
 
 app = FastAPI(title="VoltProof")
+
+
+@app.middleware("http")
+async def _bind_locale(request: Request, call_next):
+    lang = i18n.from_request(request)
+    token = i18n.use(lang)
+    try:
+        response = await call_next(request)
+        response.headers["Content-Language"] = lang
+        return response
+    finally:
+        i18n.reset(token)
 
 # PCB 能力为可选：路由无条件挂载（capabilities 如实报告工具在场性），
 # 工具缺失时相关端点返回 400 带修复指引，不影响仿真/画板主功能。
@@ -70,10 +82,10 @@ _runs_lock = threading.Lock()
 def _register_run(request_id=None):
     rid = request_id or uuid.uuid4().hex
     if not isinstance(rid, str) or not rid.replace("-", "").isalnum() or len(rid) > 64:
-        raise ValueError("任务编号非法")
+        raise ValueError(i18n.t("api.run_id"))
     with _runs_lock:
         if rid in _runs:
-            raise ValueError("任务编号正在使用")
+            raise ValueError(i18n.t("api.run_busy"))
         event = _runs[rid] = threading.Event()
     return rid, event
 
@@ -171,7 +183,7 @@ def chat(req: ChatReq):
 
 
 @app.post("/chat/stream")
-def chat_stream(req: ChatReq):
+def chat_stream(req: ChatReq, request: Request):
     """SSE 版 /chat：修复环每前进一步推一个事件，最后推 done（完整证据包）。
     事件格式 data: {"type":"stage"|"done"|"error", ...}\\n\\n"""
     ws = _active_ws
@@ -182,7 +194,10 @@ def chat_stream(req: ChatReq):
     except ValueError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
 
+    lang = i18n.from_request(request)
+
     def gen():
+        token = i18n.use(lang)
         try:
             yield f'data: {json.dumps({"type": "stage", "stage": "start", "request_id": rid, "round": 0, "problems": []})}\n\n'
             for ev in pipeline.chat_with_conversation_events(
@@ -197,6 +212,7 @@ def chat_stream(req: ChatReq):
             cancel_event.set()
             with _runs_lock:
                 _runs.pop(rid, None)
+            i18n.reset(token)
 
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache"})
@@ -207,9 +223,9 @@ def cancel_run(request_id: str):
     with _runs_lock:
         event = _runs.get(request_id)
         if event is None:
-            return JSONResponse(status_code=404, content={"error": "任务已结束或不存在"})
+            return JSONResponse(status_code=404, content={"error": i18n.t("api.run_gone")})
         event.set()
-    return {"ok": True, "note": "已请求取消；当前模型调用返回后停止后续执行，不应用电路"}
+    return {"ok": True, "note": i18n.t("api.run_cancel")}
 
 
 @app.post("/demo/verified")
@@ -218,7 +234,7 @@ def demo_verified(req: RawReq):
     import tempfile
     message = (req.message or "").strip()
     if not message:
-        return JSONResponse(status_code=400, content={"error": "请输入对照问题"})
+        return JSONResponse(status_code=400, content={"error": i18n.t("api.compare_empty")})
     try:
         with tempfile.TemporaryDirectory(prefix="voltproof-demo-") as tmp:
             ws = Workspace(Path(tmp))
@@ -226,7 +242,7 @@ def demo_verified(req: RawReq):
             result = pipeline.chat_with_conversation(None, message, workspace=ws, adopt=False)
         result["applied"] = False
         result["demo"] = True
-        result["note"] = "对照演示只在临时工作区运行，没有替换当前项目电路。要留下设计，请回到工作台对话重新运行。"
+        result["note"] = i18n.t("api.demo_note")
         return result
     except ValueError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
@@ -267,13 +283,13 @@ def ws_open(req: WsOpenReq):
     global _active_ws
     p = req.path.strip().strip('"').strip("'")
     if not p:
-        return JSONResponse(status_code=400, content={"error": "path 不能为空"})
+        return JSONResponse(status_code=400, content={"error": i18n.t("api.path_empty")})
     try:
         ws = Workspace(p)
     except WorkspaceError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
     if not ws.root.is_dir():
-        return JSONResponse(status_code=400, content={"error": f"目录不存在：{ws.root}"})
+        return JSONResponse(status_code=400, content={"error": i18n.t("api.dir_missing", path=ws.root)})
     ws.ensure()
     _active_ws = ws
     return {"root": str(ws.root)}
@@ -295,7 +311,7 @@ def conv_detail(cid: str):
     """恢复对话：完整消息流，证据卡从任务档案重建（图片走 /api/files）。"""
     conv = pipeline.restore_conversation(cid, workspace=_active_ws)
     if conv is None:
-        return JSONResponse(status_code=404, content={"error": "对话不存在"})
+        return JSONResponse(status_code=404, content={"error": i18n.t("api.conv_missing")})
     return conv
 
 
@@ -308,7 +324,7 @@ def ws_file(task_id: str, name: str):
     except PermissionError as e:
         return JSONResponse(status_code=403, content={"error": str(e)})
     if not f.is_file():
-        return JSONResponse(status_code=404, content={"error": "文件不存在"})
+        return JSONResponse(status_code=404, content={"error": i18n.t("api.file_missing")})
     return FileResponse(f)
 
 
@@ -387,7 +403,7 @@ def project_requirements(req: RequirementsReq):
         with project.lock(ws):
             p = ws.load_project()
             if project.revision(p) != req.expected_revision:
-                raise project.Conflict("项目已更新，请重新打开验收条件")
+                raise project.Conflict(i18n.t("api.req_stale"))
             if requirements != p.get("requirements", []):
                 p.update(requirements=requirements, dirty=bool(p.get("netlist") or p.get("dirty")),
                          requirements_pending=True,
@@ -431,24 +447,24 @@ def project_put(req: ProjectPutReq):
     try:
         payload = json.dumps(req.canvas or {}, ensure_ascii=False)
     except (TypeError, ValueError) as e:
-        return JSONResponse(status_code=400, content={"error": f"画布序列化失败：{e}"})
+        return JSONResponse(status_code=400, content={"error": i18n.t("api.canvas_ser", msg=e)})
     if len(payload) > 256 * 1024:
-        return JSONResponse(status_code=400, content={"error": "画布过大（>256KB）"})
+        return JSONResponse(status_code=400, content={"error": i18n.t("api.canvas_big")})
     canvas = req.canvas
     if canvas is not None:
         if not isinstance(canvas, dict) or not all(
                 isinstance(canvas.get(k), list) for k in ("comps", "wires", "labels")):
             return JSONResponse(status_code=400,
-                                content={"error": "画布结构非法：需要 comps/wires/labels 三个数组"})
+                                content={"error": i18n.t("api.canvas_shape")})
         for c in canvas["comps"]:
             if not isinstance(c, dict):
-                return JSONResponse(status_code=400, content={"error": "元件结构非法"})
+                return JSONResponse(status_code=400, content={"error": i18n.t("api.comp_shape")})
             try:
                 c["x"] = max(0, min(50, int(c.get("x") or 0)))
                 c["y"] = max(0, min(35, int(c.get("y") or 0)))
                 c["rot"] = max(0, min(3, int(c.get("rot") or 0)))
             except (TypeError, ValueError, OverflowError):
-                return JSONResponse(status_code=400, content={"error": "元件坐标或旋转值非法"})
+                return JSONResponse(status_code=400, content={"error": i18n.t("api.comp_coord")})
     analysis = ({k: str(v)[:16] for k, v in req.analysis.items()
                  if k in ("type", "tstop", "fstart", "fstop")} if req.analysis is not None else None)
     try:
@@ -474,7 +490,7 @@ def whatif_components():
         return JSONResponse(status_code=409, content={"error": str(e)})
     if not netlist:
         return JSONResponse(status_code=400,
-                            content={"error": "本项目还没有验证通过的电路——先设计一个再扫描"})
+                            content={"error": i18n.t("api.whatif_none")})
     from .whatif import scan_components
     return {"components": scan_components(netlist), "revision": project.revision(p), "version_id": p.get("version_id")}
 
@@ -487,12 +503,12 @@ def whatif_run(req: WhatifReq):
     try:
         netlist = project.active_netlist(p, verified=True)
         if req.expected_revision is not None and req.expected_revision != project.revision(p):
-            raise project.Conflict("项目版本已改变，请重新打开参数扫描")
+            raise project.Conflict(i18n.t("api.whatif_rev"))
     except project.Conflict as e:
         return JSONResponse(status_code=409, content={"error": str(e)})
     if not netlist:
         return JSONResponse(status_code=400,
-                            content={"error": "本项目还没有验证通过的电路"})
+                            content={"error": i18n.t("api.whatif_none_short")})
     from . import whatif
     tid = ws.new_task_id()
     try:
@@ -506,7 +522,7 @@ def whatif_run(req: WhatifReq):
                 continue
             point_id = f"{tid}-p{i + 1}"
             nl = (ws.task_sim_dir(tid) / f"point-{i + 1}" / "circuit.cir").read_text(encoding="utf-8")
-            ev = pipeline.Evidence(ok=True, request=f"参数扫描 {req.component}={point['value']}", netlist=nl,
+            ev = pipeline.Evidence(ok=True, request=i18n.t_zh("timeline.whatif.point", comp=req.component, value=point["value"]), netlist=nl,
                 source="whatif-point", task_id=point_id, requirements=p.get("requirements", []),
                 metrics=point.get("metrics", {}), checks=point.get("checks", []),
                 verdict="passed" if point.get("checks") else "simulated",
@@ -527,7 +543,7 @@ def whatif_run(req: WhatifReq):
             point["candidate_id"] = v["id"]
         d["recommended_index"] = next((i for i, point in enumerate(d.get("points", [])) if point.get("passed") is True), None)
         d.update(version_id=p.get("version_id"), base_revision=project.revision(p), source="whatif", task_id=tid)
-        scan_ev = pipeline.Evidence(ok=True, request=f"参数扫描 {req.component} × {d.get('metric_name') or req.metric}",
+        scan_ev = pipeline.Evidence(ok=True, request=i18n.t_zh("timeline.whatif.scan", comp=req.component, metric=whatif.metric_label(req.metric, lang="zh-CN")),
                                     source="whatif", task_id=tid, netlist=netlist, verdict="simulated")
         pipeline._write_evidence_file(scan_ev, ws.task_docs_dir(tid))
         f = ws.task_docs_dir(tid) / "scan.json"
@@ -555,9 +571,9 @@ def draw_verify(req: DrawVerifyReq):
         if req.use_current_version:
             p = ws.load_project()
             if req.expected_revision != project.revision(p):
-                raise project.Conflict("项目已更新，请重新载入后仿真")
+                raise project.Conflict(i18n.t("api.sim_rev"))
             netlist = project.active_netlist(p, verified=True)
-        return draw_api.verify_drawn(netlist, req.title.strip() or "未命名电路",
+        return draw_api.verify_drawn(netlist, req.title.strip() or i18n.t("untitled"),
                                      ws, requirements=req.requirements,
                                      expected_revision=req.expected_revision, canvas=req.canvas)
     except project.Conflict as e:
@@ -575,13 +591,13 @@ def draw_interpret(req: DrawInterpretReq):
     try:
         return draw_api.interpret_drawn(_active_ws, req.task_id)
     except llm.LLMError as e:
-        return JSONResponse(status_code=400, content={"error": f"大模型不可用：{e}"})
+        return JSONResponse(status_code=400, content={"error": i18n.t("api.llm_down", msg=e)})
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 @app.post("/api/draw/ai/stream")
-def draw_ai_stream(req: DrawAiReq):
+def draw_ai_stream(req: DrawAiReq, request: Request):
     """AI 画图轮（SSE）：自然语言 → 生成/修改网表 → 修复环验证 → 网表确定性
     布局成画布 schema。事件格式与 /chat/stream 一致；done 额外带 canvas。"""
     from . import draw_api
@@ -593,7 +609,10 @@ def draw_ai_stream(req: DrawAiReq):
     except ValueError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
 
+    lang = i18n.from_request(request)
+
     def gen():
+        token = i18n.use(lang)
         try:
             for ev in draw_api.ai_draw_events(req.message, req.canvas_netlist, ws,
                     requirements=req.requirements, expected_revision=req.expected_revision,
@@ -605,6 +624,7 @@ def draw_ai_stream(req: DrawAiReq):
             cancel_event.set()
             with _runs_lock:
                 _runs.pop(rid, None)
+            i18n.reset(token)
 
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache"})
@@ -615,7 +635,7 @@ def report(cid: str):
     """实验报告：对话 → 单文件 HTML（图片内嵌），浏览器打印即 PDF。"""
     conv = pipeline.find_conversation(cid, workspace=_active_ws)
     if conv is None:
-        return JSONResponse(status_code=404, content={"error": "对话不存在"})
+        return JSONResponse(status_code=404, content={"error": i18n.t("api.conv_missing")})
     from .report import build_report_html
     return HTMLResponse(content=build_report_html(conv, _active_ws),
                         headers={"Content-Disposition":

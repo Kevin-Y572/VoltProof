@@ -5,6 +5,12 @@
    宿主集成经 window.VPBoard（见文件末尾）。 */
 (() => {
 "use strict";
+const tt = (k, v) => VPI18n.t(k, v);
+const trs = s => VPI18n.tr(s);
+const partName = type => tt("part." + type);
+const partHint = type => tt("hint." + type);
+let simBusy = false;
+let lastResult = null;
 // ---------------------------------------------------------------------------
 // 状态：元件 / 导线 / 标签 全部以整数网格坐标存储（1 格 = 20px）
 // ---------------------------------------------------------------------------
@@ -51,22 +57,29 @@ let loadGeneration = 0;
 let previewMeta = null, lastResultTask = "", activeAiRequest = null;
 const stateBadge = document.createElement("span"); stateBadge.className = "proof-state";
 $("title").after(stateBadge);
-const requirementsBtn = document.createElement("button"); requirementsBtn.className="btn"; requirementsBtn.textContent="验收条件";
+const requirementsBtn = document.createElement("button"); requirementsBtn.className="btn"; requirementsBtn.textContent=tt("btn.accept");
 requirementsBtn.onclick = () => VPProof.editRequirements().catch(e => { projectMessage=e.message; updateProjectState(); });
 $("simBtn").before(requirementsBtn);
-const projectReport = document.createElement("a"); projectReport.className="btn"; projectReport.textContent="项目报告"; projectReport.href="/api/project/report"; projectReport.target="_blank";
+const projectReport = document.createElement("a"); projectReport.className="btn"; projectReport.textContent=tt("btn.report"); projectReport.href="/api/project/report?lang=" + encodeURIComponent(VPI18n.apiLang()); projectReport.target="_blank";
 requirementsBtn.before(projectReport);
-const compareBtn=document.createElement('button');compareBtn.className='btn';compareBtn.textContent='版本对比';
+const compareBtn=document.createElement('button');compareBtn.className='btn';compareBtn.textContent=tt("btn.compare");
 compareBtn.onclick=()=>VPProof.compareVersions().catch(e=>{projectMessage=e.message;updateProjectState();});
 projectReport.before(compareBtn);
 
+function isDefaultTitle(name) {
+  const raw = String(name || "").trim();
+  return raw === "未命名电路" || raw === "Untitled circuit";
+}
+function applyTitle(name) {
+  $("title").value = !name || isDefaultTitle(name) ? tt("untitled") : name;
+}
 function projectPayload() {
-  return {name:$("title").value || "未命名电路", canvas:{comps,wires,labels},
+  return {name:$("title").value || tt("untitled"), canvas:{comps,wires,labels},
     analysis:{type:$("analysis").value,tstop:$("tstop").value,fstart:$("fstart").value,fstop:$("fstop").value},
     draft_netlist:comps.length ? buildNetlist() : ""};
 }
 function updateProjectState() {
-  stateBadge.textContent = projectMessage || `${projectVersion ? "版本 " + projectVersion.slice(0,8) : "草稿"} · ${projectDirty ? "已修改，尚未验证" : "已保存"}`;
+  stateBadge.textContent = (projectMessage ? trs(projectMessage) : "") || `${projectVersion ? tt("state.version", {id: projectVersion.slice(0,8)}) : tt("state.draft")} · ${projectDirty ? tt("state.dirty") : tt("state.saved")}`;
   const note = document.getElementById("dirtyNote");
   if (note) note.hidden = !projectDirty;
 }
@@ -79,14 +92,14 @@ function save() {
 function flushProject() {
   clearTimeout(saveTimer);
   saveQueue = saveQueue.catch(()=>{}).then(async () => {
-      if (!projectLoaded) throw new Error("项目还在载入，请稍后重试");
+      if (!projectLoaded) throw new Error(tt("project.loading"));
       const generation=loadGeneration, payload = projectPayload(), serialized = JSON.stringify(payload);
       if (serialized === lastSavedPayload) return;
       const r = await fetch("/api/project", {
         method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({...payload, expected_revision:projectRevision}),
       });
-      const d=await r.json(); if (!r.ok) throw new Error(d.error || "项目保存失败，请重新载入");
+      const d=await r.json(); if (!r.ok) throw new Error(trs(d.error) || tt("project.saveFail"));
       if(generation!==loadGeneration) return;
       projectRevision=d.revision; projectDirty=!!d.dirty; lastSavedPayload=serialized; projectMessage=""; updateProjectState();
   });
@@ -105,7 +118,7 @@ function applyProjectCanvas(p) {
     nextId = Math.max(1, ...comps.map(c => c.id), ...wires.map(w => w.id),
                       ...labels.map(l => l.id)) + 1;
   }
-  if (p && p.name) $("title").value = p.name;
+  if (p) applyTitle(p.name);
   const an = p && p.analysis;
   if (an && an.type) {
     $("analysis").value = an.type;
@@ -122,7 +135,7 @@ async function loadProject() {
   let p = null;
   try {
     p = await (await fetch("/api/project")).json();
-  } catch (e) { projectMessage="项目载入失败，请重新载入"; updateProjectState(); return; }
+  } catch (e) { projectMessage=tt("project.loadFail"); updateProjectState(); return; }
   applyProjectCanvas(p);
   const hasServerCanvas = !!(p && p.canvas && p.canvas.comps && p.canvas.comps.length);
   let migrated=false;
@@ -138,8 +151,7 @@ async function loadProject() {
       localStorage.removeItem("vp_draw_v1");
     } catch (e) { /* 迁移失败不阻塞 */ }
   }
-  if (p && p.name) $("title").value = p.name;
-  else $("title").value="未命名电路";
+  applyTitle(p && p.name);
   projectRevision=p?.revision ?? 0; projectVersion=p?.version_id || ""; projectDirty=!!p?.dirty;
   projectRequirements=p?.requirements || [];
   projectMessage=""; lastSavedPayload=migrated ? "" : JSON.stringify(projectPayload()); projectLoaded=true;
@@ -286,9 +298,9 @@ function netNames() {
   const labelErrors = [];
   for (const l of labels) {
     const k = key(l.x, l.y);
-    if (!(k in parent)) { labelErrors.push(`标签「${l.text}」没贴在任何导线或引脚上`); continue; }
+    if (!(k in parent)) { labelErrors.push(tt("err.label.off", {name: l.text})); continue; }
     const r = find(k);
-    if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(l.text)) { labelErrors.push(`标签「${l.text}」不是合法节点名（字母开头）`); continue; }
+    if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(l.text)) { labelErrors.push(tt("err.label.bad", {name: l.text})); continue; }
     roots.get(r).labels.push(l.text);
   }
   const used = new Set(["0"]);
@@ -298,8 +310,8 @@ function netNames() {
     if (info.gnd) { nets.set(r, "0"); continue; }
     if (info.labels.length) {
       const name = info.labels[0];
-      if (info.labels.length > 1) labelErrors.push(`同一网络贴了多个标签：${info.labels.join(" / ")}`);
-      if (used.has(name.toLowerCase())) labelErrors.push(`网络名「${name}」重复使用`);
+      if (info.labels.length > 1) labelErrors.push(tt("err.label.multi", {names: info.labels.join(" / ")}));
+      if (used.has(name.toLowerCase())) labelErrors.push(tt("err.label.dup", {name}));
       used.add(name.toLowerCase());
       nets.set(r, name);
       continue;
@@ -335,24 +347,24 @@ function precheck() {
       floating.push(ps[0]);
   }
   for (const p of floating)
-    errors.push(`${p.comp.name || DEFS[p.comp.type].cn} 的引脚 ${p.idx + 1} 未连接（悬空）`);
+    errors.push(tt("err.float", {name: p.comp.name || partName(p.comp.type), pin: p.idx + 1}));
   if (comps.length && !comps.some(c => c.type === "GND"))
-    errors.push("电路缺少接地（GND）——每个网络都需要到地的通路");
+    errors.push(tt("err.gnd"));
   if (comps.length && !comps.some(c => c.type.startsWith("V") || c.type === "ISRC"))
-    errors.push("电路缺少电源（电压源或电流源）");
+    errors.push(tt("err.src"));
   for (const c of comps) {
     const def = DEFS[c.type];
     if (def.pre && !new RegExp("^" + def.pre, "i").test(c.name || ""))
-      errors.push(`${def.cn}名称必须以 ${def.pre} 开头（当前：${c.name || "（空）"}）`);
+      errors.push(tt("err.prefix", {kind: partName(c.type), pre: def.pre, name: c.name || tt("err.prefix.empty")}));
     if ((c.type === "R" || c.type === "C" || c.type === "L" || c.type === "VDC" || c.type === "VSIN" || c.type === "ISRC") && !String(c.value || "").trim())
-      errors.push(`${c.name || def.cn} 缺少值`);
+      errors.push(tt("err.value", {name: c.name || partName(c.type)}));
     if (/\d+M(?![A-Za-z])/.test(String(c.value || "")))
-      errors.push(`${c.name}：SPICE 里大写 M 是毫，兆要写 Meg（当前：${c.value}）`);
+      errors.push(tt("err.meg", {name: c.name, value: c.value}));
   }
   // 有导线但网上一个引脚都没有 → 孤立导线（移动元件后常见）
   for (const w of wires) {
     const r = find(key(w.pts[0][0], w.pts[0][1]));
-    if ((rootPins.get(r) || []).length === 0) warnings.push(`有一条导线没有连接任何元件`);
+    if ((rootPins.get(r) || []).length === 0) warnings.push(tt("err.orphan"));
   }
   return { errors, warnings, floating };
 }
@@ -413,7 +425,7 @@ function buildNetlist() {
     seen.add(name);
     if (wnodes.length < 40) wnodes.push(`v(${name})`);
   }
-  const title = ($("title").value || "未命名电路").replace(/\n/g, " ");
+  const title = ($("title").value || tt("untitled")).replace(/\n/g, " ");
   return [`* ${title} -- VoltProof 画板生成`, ...cards, ...models,
           ".control", "set filetype=ascii", cmd,
           `write out.raw ${wnodes.join(" ")}`, ".endc", ".end"].join("\n") + "\n";
@@ -521,16 +533,16 @@ function render(withProps = true) {
 
   // 状态栏
   let st = "";
-  if (placing) st += `<span class="k">点击画布放置「${DEFS[placing].cn}」，R 旋转，Esc 取消</span><br>`;
-  if (wiring) st += `<span class="k">连线中：点击引脚/导线结束，点击空处加拐点，Esc 取消</span><br>`;
+  if (placing) st += `<span class="k">${esc(tt("status.place", {name: partName(placing)}))}</span><br>`;
+  if (wiring) st += `<span class="k">${esc(tt("status.wire"))}</span><br>`;
   for (const e of pre.errors.slice(0, 8)) st += `<span class="e">✗ ${esc(e)}</span><br>`;
   for (const w2 of pre.warnings.slice(0, 4)) st += `<span class="w">⚠ ${esc(w2)}</span><br>`;
-  if (!st) st = `<span class="k">✓ 电路连线检查通过</span>　<span>提示：导线共享格点即连通；交叉不想连通就错开一格。</span>`;
+  if (!st) st = `<span class="k">${esc(tt("status.ok"))}</span>　<span>${esc(tt("status.okHint"))}</span>`;
   if (!comps.length && !placing && !wiring && !preview)
-    st = `<span class="k">画布为空：从左侧选择元件开始画电路，或在下方让 AI 画一个电路。</span>`;
+    st = `<span class="k">${esc(tt("status.empty"))}</span>`;
   if (preview)
-    st = `<span class="k">🤖 AI 电路预览中——点上方「✓ 应用到画布」替换画布，或「✗ 丢弃」保留原图（Esc = 丢弃）</span>`;
-  $("status").innerHTML = st + '<span id="dirtyNote" class="w"><br>画布有修改，尚未重新验证；扫描和项目解读需先仿真。</span>';
+    st = `<span class="k">${esc(tt("status.preview"))}</span>`;
+  $("status").innerHTML = st + `<span id="dirtyNote" class="w"><br>${esc(tt("status.dirty"))}</span>`;
   updateProjectState();
   if (withProps) renderProps(pre);
   syncResultPanel(pre);
@@ -569,10 +581,7 @@ function previewSVG() {
 function renderProps(pre) {
   const body = $("propBody");
   if (!sel) {
-    body.innerHTML = `点击画布上的元件进行编辑。<br><br>
-      <b>连线</b>：点元件引脚（蓝点）→ 点另一引脚或导线。<br>
-      <b>快捷键</b>：R 旋转 · Del 删除 · Esc 取消。<br><br>
-      <span style="color:var(--dim)">画完点右上角「仿真」——ngspice 实测，波形与指标都来自真实仿真。</span>`;
+    body.innerHTML = tt("props.empty");
     return;
   }
   if (sel.kind === "comp") {
@@ -581,14 +590,14 @@ function renderProps(pre) {
     const def = DEFS[c.type];
     const showVal = ["R", "C", "L", "VDC", "VSIN", "ISRC", "LBL"].includes(c.type);
     body.innerHTML = `
-      <b>${def.cn}</b>
-      ${def.pre ? `<label>名称（首字母须为 ${def.pre}）</label>
+      <b>${esc(partName(c.type))}</b>
+      ${def.pre ? `<label>${esc(tt("prop.name", {pre: def.pre}))}</label>
       <input type="text" id="pName" value="${esc(c.name)}">` : ""}
-      ${showVal ? `<label>值</label><input type="text" id="pVal" value="${esc(String(c.value))}">` : ""}
-      <div id="propHint">${def.vh || ""}</div>
+      ${showVal ? `<label>${esc(tt("prop.value"))}</label><input type="text" id="pVal" value="${esc(String(c.value))}">` : ""}
+      <div id="propHint">${esc(partHint(c.type))}</div>
       <div class="rowbtns">
-        <button class="btn" id="pRot">旋转 (R)</button>
-        <button class="btn" id="pDel" style="color:var(--err)">删除</button>
+        <button class="btn" id="pRot">${esc(tt("prop.rotate"))}</button>
+        <button class="btn" id="pDel" style="color:var(--err)">${esc(tt("prop.delete"))}</button>
       </div>`;
     const nm = $("pName"), vl = $("pVal");
     // render(false)：只重画画布与状态栏，不重建属性面板——否则输入焦点丢失
@@ -599,15 +608,15 @@ function renderProps(pre) {
   } else if (sel.kind === "wire") {
     const w = wires.find(x => x.id === sel.id);
     if (!w) { sel = null; return; }
-    body.innerHTML = `<b>导线</b><div class="rowbtns"><button class="btn" id="pDel" style="color:var(--err)">删除导线</button></div>`;
+    body.innerHTML = `<b>${esc(tt("prop.wire"))}</b><div class="rowbtns"><button class="btn" id="pDel" style="color:var(--err)">${esc(tt("prop.wireDel"))}</button></div>`;
     $("pDel").onclick = () => { wires = wires.filter(x => x.id !== w.id); sel = null; render(); };
   } else if (sel.kind === "label") {
     const l = labels.find(x => x.id === sel.id);
     if (!l) { sel = null; return; }
-    body.innerHTML = `<b>网络标签</b><label>网络名</label>
+    body.innerHTML = `<b>${esc(tt("prop.label"))}</b><label>${esc(tt("prop.net"))}</label>
       <input type="text" id="pLbl" value="${esc(l.text)}">
-      <div id="propHint">贴在导线或引脚上，给网络命名（如 in / out / vcc）——指标与波形会显示这个名字。</div>
-      <div class="rowbtns"><button class="btn" id="pDel" style="color:var(--err)">删除</button></div>`;
+      <div id="propHint">${esc(tt("prop.netHint"))}</div>
+      <div class="rowbtns"><button class="btn" id="pDel" style="color:var(--err)">${esc(tt("prop.delete"))}</button></div>`;
     $("pLbl").oninput = () => { l.text = $("pLbl").value.trim(); render(false); };
     $("pDel").onclick = () => { labels = labels.filter(x => x.id !== l.id); sel = null; render(); };
   }
@@ -719,14 +728,12 @@ window.addEventListener("keydown", e => {
 // ---------------------------------------------------------------------------
 function buildPalette() {
   const order = ["R", "C", "L", "D", "QN", "MN", "OP", "VDC", "VSIN", "ISRC", "GND", "LBL"];
-  $("palette").innerHTML = order.map(t => `
-    <div class="pal" data-type="${t}" title="${DEFS[t].vh || DEFS[t].cn}">
-      <svg width="44" height="44" viewBox="-2.8 -2.8 5.6 5.6"><g stroke-width="0.1">${symbolSVG(t)}</g></svg>
-      <span>${DEFS[t].cn}</span>
+  $("palette").innerHTML = order.map(type => `
+    <div class="pal" data-type="${type}" title="${esc(partHint(type))}">
+      <svg width="44" height="44" viewBox="-2.8 -2.8 5.6 5.6"><g stroke-width="0.1">${symbolSVG(type)}</g></svg>
+      <span>${esc(partName(type))}</span>
     </div>`).join("") +
-    `<div class="hints" style="margin-top:10px;font-size:11px;line-height:1.6">
-      共享格点即连通；交叉不连就错开一格。<br><br>
-      R 旋转 · Del 删除 · 右键取消</div>`;
+    `<div class="hints" style="margin-top:10px;font-size:11px;line-height:1.6">${tt("pal.hint")}</div>`;
   for (const el of document.querySelectorAll(".pal")) {
     el.onclick = () => {
       placing = el.dataset.type; placingRot = 0; wiring = null; sel = null;
@@ -743,7 +750,7 @@ $("analysis").onchange = () => {
 ["title", "tstop", "fstart", "fstop"].forEach(id => { $(id).oninput = save; });
 
 $("clearBtn").onclick = () => {
-  if (!confirm("清空画布？此操作不可撤销。")) return;
+  if (!confirm(tt("clear.confirm"))) return;
   comps = []; wires = []; labels = []; sel = null; wiring = null;
   render();  // 项目时间线（任务历史）不清——它是项目档案
   updateAiPlaceholder();
@@ -756,7 +763,7 @@ $("cirBtn").onclick = () => {
   a.click(); URL.revokeObjectURL(a.href);
 };
 $("demoBtn").onclick = () => {
-  if (comps.length && !confirm("载入示例会替换当前画布，继续？")) return;
+  if (comps.length && !confirm(tt("demo.confirm"))) return;
   loadDemo();
   render();
   updateAiPlaceholder();
@@ -781,7 +788,7 @@ function loadDemo() {
     { id: nextId++, x: 4, y: 12, text: "in" },
     { id: nextId++, x: 17, y: 12, text: "out" },
   ];
-  $("title").value = "RC 低通滤波器示例";
+  $("title").value = tt("demo.title");
   $("analysis").value = "tran"; $("tstop").value = "5m";
   $("analysis").onchange();
 }
@@ -796,12 +803,12 @@ function circuitStamp() {
     analysis:$("analysis").value, tstop:$("tstop").value, fstart:$("fstart").value, fstop:$("fstop").value});
 }
 function blockedHtml(errors) {
-  return `<div class="evidence"><div class="verdict fail">✗ 还不能仿真：先修掉连线错误</div>
+  return `<div class="evidence"><div class="verdict fail">${esc(tt("result.blocked"))}</div>
       <div class="errbox">${errors.map(esc).join("<br>")}</div></div>`;
 }
 function staleHtml() {
-  return `<div class="evidence"><div class="verdict">电路已变化，请重新仿真</div>
-      <div class="hints">当前连线检查已通过。上次仿真结果不再对应当前画布。</div></div>`;
+  return `<div class="evidence"><div class="verdict">${esc(tt("result.stale"))}</div>
+      <div class="hints">${esc(tt("result.staleHint"))}</div></div>`;
 }
 function syncResultPanel(pre) {
   pre = pre || precheck();
@@ -846,14 +853,15 @@ $("simBtn").onclick = async () => {
     return;
   }
   const nl = buildNetlist();
-  $("simBtn").disabled = true; $("simBtn").textContent = "仿真中…";
+  simBusy = true;
+  $("simBtn").disabled = true; $("simBtn").textContent = tt("sim.running");
   try {
     await flushProject();
     const stampAtRequest = circuitStamp();
     const payloadAtRequest = JSON.stringify(projectPayload());
     const r = await fetch("/api/draw/verify", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: $("title").value || "未命名电路", netlist: nl,
+      body: JSON.stringify({ title: $("title").value || tt("untitled"), netlist: nl,
                              use_current_version:!projectDirty && !!projectVersion,
                              expected_revision:projectRevision, canvas:{comps,wires,labels} }),
     });
@@ -864,24 +872,25 @@ $("simBtn").onclick = async () => {
     }
     updateProjectState();
     renderResult(d, stampAtRequest);
-    addRound("sim", $("title").value || "未命名电路", !!d.ok);
+    addRound("sim", $("title").value || tt("untitled"), !!d.ok);
     if (window.refreshWorkspaceInfo) window.refreshWorkspaceInfo();
   } catch (err) {
     verifiedHTML = "";
     resultMode = "idle";
     $("resultPanel").style.display = "block";
-    $("resultPanel").innerHTML = `<div class="evidence"><div class="verdict fail">✗ 请求失败：${esc(String(err))}</div></div>`;
+    $("resultPanel").innerHTML = `<div class="evidence"><div class="verdict fail">${esc(tt("result.requestFail", {msg: String(err)}))}</div></div>`;
   } finally {
-    $("simBtn").disabled = false; $("simBtn").textContent = "▶ 仿真";
+    simBusy = false;
+    $("simBtn").disabled = false; $("simBtn").textContent = tt("sim.run");
   }
 };
 
-function renderResult(d, stamp) {
+function renderResult(d, stamp, quiet) {
   const panel = $("resultPanel");
   if (d.error && !d.stage) {
     verifiedHTML = ""; verifiedStamp = ""; resultMode = "idle";
     panel.style.display = "block";
-    panel.innerHTML = `<div class="evidence"><div class="verdict fail">✗ ${esc(d.error)}</div></div>`;
+    panel.innerHTML = `<div class="evidence"><div class="verdict fail">✗ ${esc(trs(d.error))}</div></div>`;
     return;
   }
   const ok = !!d.ok;
@@ -889,34 +898,35 @@ function renderResult(d, stamp) {
   $("aiBtn").disabled = !ok;
   const chips = Object.entries(d.metrics || {}).slice(0, 14)
     .map(([k, v]) => `<span class="metric">${esc(k)} = <b>${typeof v === "number" ? (+v.toPrecision(4)) : esc(v)}</b></span>`).join("");
-  const stageName = { safety: "安全检查", checks: "电路检查", simulate: "ngspice 仿真" }[d.stage] || d.stage;
+  const anKey = {op:"analysis.op", tran:"analysis.tran", ac:"analysis.ac"}[d.analysis];
   verifiedHTML = `<div class="evidence">
-    <div class="verdict ${d.verdict === "passed" ? "ok" : ""}">${VPProof.label(d)}　<span style="color:var(--dim);font-weight:400;font-size:12px">${d.analysis ? "分析类型：" + ({ op: "直流工作点", tran: "瞬态", ac: "交流扫描" }[d.analysis] || d.analysis) + " · " : ""}耗时 ${d.elapsed ?? "–"}s</span></div>
+    <div class="verdict ${d.verdict === "passed" ? "ok" : ""}">${VPProof.label(d)}　<span style="color:var(--dim);font-weight:400;font-size:12px">${d.analysis ? esc(tt("result.analysis", {name: anKey ? tt(anKey) : d.analysis})) + " · " : ""}${esc(tt("result.elapsed", {s: d.elapsed ?? "–"}))}</span></div>
     ${VPProof.checks(d)}${VPProof.details({...d, candidate_id:undefined})}
-    ${d.errors && d.errors.length ? `<div class="errbox">${d.errors.map(esc).join("<br>")}${d.hint ? `<br><span class="h">↳ ${esc(d.hint)}</span>` : ""}</div>` : ""}
+    ${d.errors && d.errors.length ? `<div class="errbox">${d.errors.map(x => esc(trs(x))).join("<br>")}${d.hint ? `<br><span class="h">↳ ${esc(trs(d.hint))}</span>` : ""}</div>` : ""}
     ${chips ? `<div class="metrics">${chips}</div>` : ""}
-    ${d.waveform_b64 ? `<img class="wave" src="data:image/png;base64,${d.waveform_b64}" alt="波形">` : ""}
-    ${d.schematic_b64 ? `<img class="sch" src="data:image/png;base64,${d.schematic_b64}" alt="原理图">` : ""}
+    ${d.waveform_b64 ? `<img class="wave" src="data:image/png;base64,${d.waveform_b64}" alt="${esc(tt("chat.waveAlt"))}">` : ""}
+    ${d.schematic_b64 ? `<img class="sch" src="data:image/png;base64,${d.schematic_b64}" alt="${esc(tt("chat.schAlt"))}">` : ""}
     <div id="interpBox"></div>
     ${ok ? `<div class="rowbtns">
-        <button class="btn" id="aiBtn2">🤖 AI 解读</button>
-        <a class="btn" href="/" target="_blank" style="text-decoration:none" title="项目的讨论线程都在主页：what-if 扫描、实验报告、继续追问">💬 对话页</a>
+        <button class="btn" id="aiBtn2">${esc(tt("ai.explain"))}</button>
+        <a class="btn" href="/" target="_blank" style="text-decoration:none" title="${esc(tt("result.chatTip"))}">${esc(tt("result.chat"))}</a>
       </div>` : ""}
-    <details><summary>网表（ngspice，可直接复现）</summary><pre>${esc(d.netlist || "")}</pre></details>
-    ${d.task_id ? `<div class="hints" style="margin-top:6px">任务档案：${esc(d.task_id)}</div>` : ""}
+    <details><summary>${esc(tt("chat.netlist.repro"))}</summary><pre>${esc(d.netlist || "")}</pre></details>
+    ${d.task_id ? `<div class="hints" style="margin-top:6px">${esc(tt("result.task", {id: d.task_id}))}</div>` : ""}
   </div>`;
+  lastResult = {data: d, stamp: stamp || circuitStamp()};
   verifiedStamp = stamp || circuitStamp();
   verifiedOK = !!d.ok;
   resultMode = "idle";
   syncResultPanel();
-  panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  if (!quiet) panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 async function runInterpret() {
   if (interpreting) return;
   interpreting = true;
   const box = $("interpBox");
-  box.innerHTML = `<div class="hints">AI 解读中…（只解释波形，不会修改你的电路）</div>`;
+  box.innerHTML = `<div class="hints">${esc(tt("ai.explain.running"))}</div>`;
   try {
     const r = await fetch("/api/draw/interpret", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -925,7 +935,7 @@ async function runInterpret() {
     const d = await r.json();
     box.innerHTML = d.error
       ? `<div class="errbox">✗ ${esc(d.error)}</div>`
-      : `<details open><summary style="color:var(--acc)">AI 解读</summary><div class="interp">${esc(d.text)}</div></details>`;
+      : `<details open><summary style="color:var(--acc)">${esc(tt("ai.explain"))}</summary><div class="interp">${esc(d.text)}</div></details>`;
   } catch (err) {
     box.innerHTML = `<div class="errbox">✗ ${esc(String(err))}</div>`;
   } finally { interpreting = false; }
@@ -935,11 +945,11 @@ $("aiBtn").onclick = runInterpret;
 // ---------------------------------------------------------------------------
 // AI 画图：自然语言 → /api/draw/ai/stream（SSE）→ 预览 → 确认应用
 // ---------------------------------------------------------------------------
-const STAGE_NAMES = { generate: "生成网表", attach: "载入网表", cache: "缓存命中",
-  start:"开始任务", requirements:"固定验收条件", intent:"识别操作意图",
-  guard: "领域检查", "static-check": "静态检查", simulate: "ngspice 仿真",
-  measure: "解析波形", verify: "指标判定", regenerate: "换架构重生成",
-  "skidl-build": "SKiDL 构建", interpret: "AI 解读", schematic: "原理图" };
+function stageLabel(stage) {
+  const key = "stage." + stage;
+  const label = tt(key);
+  return label === key ? stage : label;
+}
 let aiBusy = false;
 let preview = null;    // 待应用的 AI 画布（预览态锁定编辑）
 let undoStack = [];    // AI 应用前的画布快照（深 20）
@@ -960,9 +970,7 @@ function restoreSnapshot(s) {
 }
 
 function updateAiPlaceholder() {
-  $("aiInput").placeholder = comps.length
-    ? "描述要怎么改，如：把 C1 改成 47n / 增大增益重设偏置…（基于当前画布修改）"
-    : "用自然语言画一个电路，如：设计一个截止频率 1kHz 的 RC 低通滤波器";
+  $("aiInput").placeholder = comps.length ? tt("ai.placeholder.edit") : tt("ai.placeholder.empty");
 }
 
 function addAiStep(name, problems, state, stage) {
@@ -990,7 +998,7 @@ async function sendAi() {
                              request_id:activeAiRequest, expected_revision:projectRevision,
                              canvas_netlist: comps.length ? buildNetlist() : null }),
     });
-    if (!r.ok || !r.body) { const d=await r.json(); throw new Error(d.error || "请求失败"); }
+    if (!r.ok || !r.body) { const d=await r.json(); throw new Error(trs(d.error) || tt("ai.requestFail")); }
     const reader = r.body.getReader(), dec = new TextDecoder();
     let buf = "";
     while (true) {
@@ -1018,9 +1026,9 @@ async function sendAi() {
 
 function handleAiEvent(ev, msg) {
   if (ev.type === "stage") {
-    addAiStep(STAGE_NAMES[ev.stage] || ev.stage, ev.problems || [], ev.state, ev.stage);
+    addAiStep(stageLabel(ev.stage), ev.problems || [], ev.state, ev.stage);
   } else if (ev.type === "error") {
-    $("aiStageLine").innerHTML += `<span class="st bad">✗ ${esc(ev.error)}</span>`;
+    $("aiStageLine").innerHTML += `<span class="st bad">✗ ${esc(trs(ev.error))}</span>`;
   } else if (ev.type === "done") {
     renderResult(ev);
     addRound("ai", msg, !!ev.ok);
@@ -1029,7 +1037,7 @@ function handleAiEvent(ev, msg) {
       enterPreview(ev.canvas);
     } else if (ev.ok) {
       $("aiStageLine").innerHTML +=
-        ' <span class="st bad">自动落布未成功——电路与指标见下方证据卡，可重试或手动画</span>';
+        `<span class="st bad">${esc(tt("ai.layoutFail"))}</span>`;
     }
     $("aiInput").value = "";
     updateAiPlaceholder();
@@ -1083,12 +1091,12 @@ async function undoAi() {
     await flushProject(); const s=undoStack[undoStack.length-1];
     const r=await fetch("/api/project/restore", {method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({version_id:s.version || "",expected_revision:projectRevision,requirements:s.requirements})});
-    const d=await r.json(); if(!r.ok) throw new Error(d.error || "撤销失败");
+    const d=await r.json(); if(!r.ok) throw new Error(trs(d.error) || tt("ai.undoFail"));
     await loadProject();
     if(s.dirty || !s.version) { restoreSnapshot(s); await flushProject(); }
     undoStack.pop();
     clearResult();
-    $("aiStageLine").textContent="已撤销 AI 应用，恢复之前的电路与验收条件";
+    $("aiStageLine").textContent=tt("ai.undone");
   } catch(e) { projectMessage=e.message; updateProjectState(); }
   updateAiPlaceholder();
 }
@@ -1100,22 +1108,28 @@ function addRound(kind, text, ok) {
   renderRounds();
 }
 
+function roundLabel(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return tt("rounds.untitled");
+  return trs(raw);
+}
 function renderRounds() {
   const icon = { ai: "🤖", sim: "⚙", chat: "💬" };
-  $("roundsList").innerHTML = rounds.length ? rounds.map(r =>
-    `<div class="round ${r.ok ? "" : "fail"}" title="${esc(r.text)}">${icon[r.kind] || "•"} ${esc(r.text.slice(0, 26))} <span class="dim">${r.ok ? "✓" : "✗"}</span></div>`
-  ).join("") : `<span class="dim">尚无轮次——手动仿真、让 AI 画一个电路，或在主页对话。</span>`;
+  $("roundsList").innerHTML = rounds.length ? rounds.map(r => {
+    const label = roundLabel(r.text);
+    return `<div class="round ${r.ok ? "" : "fail"}" title="${esc(label)}">${icon[r.kind] || "•"} ${esc(label.slice(0, 40))} <span class="dim">${r.ok ? "✓" : "✗"}</span></div>`;
+  }).join("") : `<span class="dim">${esc(tt("rounds.empty"))}</span>`;
 }
 
 async function restoreRounds() {
   // 项目时间线：全部任务档案（新在前），按 source 区分图标；本地 rounds 排在更后
   try {
     const d = await (await fetch("/api/ws/tasks")).json();
-    const fromTasks = (d.tasks || []).slice(0, 30).map(t => {
-      const src = t.source || "chat";
+    const fromTasks = (d.tasks || []).slice(0, 30).map(task => {
+      const src = task.source || "chat";
       const kind = src === "draw-sim" || src === "whatif" || src === "whatif-point" ? "sim" : (src === "draw-ai" ? "ai" : "chat");
-      const text = (t.request || "").replace(/^画板仿真：/, "");
-      return { kind, text: text || "(无标题)", ok: !!t.ok };
+      const text = (task.request || "").replace(/^画板仿真：/, "").replace(/^Canvas simulation: /, "");
+      return { kind, text, ok: !!task.ok };
     });
     rounds = fromTasks;
   } catch (e) { /* 服务端不可达：留空 */ }
@@ -1123,9 +1137,9 @@ async function restoreRounds() {
 }
 
 $("aiSend").onclick = sendAi;
-const cancelAiBtn=document.createElement("button"); cancelAiBtn.className="btn"; cancelAiBtn.textContent="取消生成";
+const cancelAiBtn=document.createElement("button"); cancelAiBtn.className="btn"; cancelAiBtn.textContent=tt("ai.cancel");
 cancelAiBtn.hidden=true;
-cancelAiBtn.onclick=async()=>{ if(activeAiRequest) { await fetch("/api/runs/"+activeAiRequest+"/cancel",{method:"POST"}); $("aiStageLine").textContent="已请求取消，当前调用结束后停止"; } };
+cancelAiBtn.onclick=async()=>{ if(activeAiRequest) { await fetch("/api/runs/"+activeAiRequest+"/cancel",{method:"POST"}); $("aiStageLine").textContent=tt("ai.cancelNote"); } };
 $("aiSend").after(cancelAiBtn);
 $("aiInput").addEventListener("keydown", e => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendAi(); }
@@ -1147,6 +1161,27 @@ loadProject();
 // ---------------------------------------------------------------------------
 // 宿主集成（统一主页使用；独立 /draw.html 不调用）
 // ---------------------------------------------------------------------------
+document.addEventListener("vp-lang", () => {
+  if (isDefaultTitle($("title").value)) {
+    $("title").value = tt("untitled");
+    // 只改默认标题的语言，不算电路被编辑，也不另存一版。
+    if (projectLoaded) lastSavedPayload = JSON.stringify(projectPayload());
+  }
+  requirementsBtn.textContent = tt("btn.accept");
+  compareBtn.textContent = tt("btn.compare");
+  projectReport.textContent = tt("btn.report");
+  projectReport.href = "/api/project/report?lang=" + encodeURIComponent(VPI18n.apiLang());
+  cancelAiBtn.textContent = tt("ai.cancel");
+  if (!simBusy) $("simBtn").textContent = tt("sim.run");
+  else $("simBtn").textContent = tt("sim.running");
+  buildPalette();
+  updateAiPlaceholder();
+  updateProjectState();
+  render();
+  renderRounds();
+  if (lastResult) renderResult(lastResult.data, lastResult.stamp, true);
+});
+
 window.VPBoard = {
   reloadProject: loadProject,   // 重拉项目画布并渲染——chat 轮画布同步成功（canvas_synced）后调用
   reloadRounds: restoreRounds,  // 刷新项目时间线（新任务落档后调用）

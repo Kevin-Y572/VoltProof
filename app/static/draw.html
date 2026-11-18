@@ -5,53 +5,57 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>VoltProof 电路画板</title>
 <link rel="icon" href="/favicon.ico">
-<link rel="stylesheet" href="board.css?v=0.4.0-qa2">
+<link rel="stylesheet" href="board.css?v=0.4.0-i18n">
 </head>
-<body>
+<body data-title-key="doc.title.draw">
 <header>
-  <h1>✏ VoltProof 电路画板</h1>
-  <a href="/">← 返回对话</a>
-  <input id="title" type="text" value="未命名电路" title="电路名称（进入对话历史与实验报告）">
+  <h1 data-i18n="draw.h1">✏ VoltProof 电路画板</h1>
+  <a href="/" data-i18n="back.chat">← 返回对话</a>
+  <input id="title" type="text" value="未命名电路" data-i18n-title="title.tip" title="电路名称（进入对话历史与实验报告）">
   <span style="flex:1"></span>
-  <label style="color:var(--dim);font-size:12px">仿真类型</label>
+  <div class="lang-switch" role="group" data-i18n-aria="lang.group" aria-label="界面语言">
+    <button type="button" class="lang-btn" data-set-lang="zh-CN">中文</button>
+    <button type="button" class="lang-btn" data-set-lang="en">English</button>
+  </div>
+  <label style="color:var(--dim);font-size:12px" data-i18n="analysis.label">仿真类型</label>
   <select id="analysis">
-    <option value="op">直流工作点</option>
-    <option value="tran" selected>瞬态</option>
-    <option value="ac">交流扫描</option>
+    <option value="op" data-i18n="analysis.op">直流工作点</option>
+    <option value="tran" selected data-i18n="analysis.tran">瞬态</option>
+    <option value="ac" data-i18n="analysis.ac">交流扫描</option>
   </select>
   <span id="anParams" style="display:flex;gap:6px;align-items:center">
-    <input id="tstop" type="text" value="10m" title="瞬态仿真时长" style="width:64px">
+    <input id="tstop" type="text" value="10m" data-i18n-title="analysis.tstop" title="瞬态仿真时长" style="width:64px">
     <span id="acBox" style="display:none;gap:6px;align-items:center">
-      <input id="fstart" type="text" value="10" title="起始频率" style="width:56px">
+      <input id="fstart" type="text" value="10" data-i18n-title="analysis.fstart" title="起始频率" style="width:56px">
       <span style="color:var(--dim)">→</span>
-      <input id="fstop" type="text" value="100k" title="终止频率" style="width:64px">
+      <input id="fstop" type="text" value="100k" data-i18n-title="analysis.fstop" title="终止频率" style="width:64px">
     </span>
   </span>
-  <button class="btn" id="demoBtn" title="载入示例 RC 低通滤波器">示例</button>
-  <button class="btn" id="clearBtn">清空</button>
-  <button class="btn" id="cirBtn" title="下载当前网表 (.cir)">导出 .cir</button>
-  <button class="btn primary" id="simBtn">▶ 仿真</button>
-  <button class="btn" id="aiBtn" disabled title="用大模型解释最近一次仿真结果（不改电路）">AI 解读</button>
+  <button class="btn" id="demoBtn" data-i18n="demo" data-i18n-title="demo.tip" title="载入示例 RC 低通滤波器">示例</button>
+  <button class="btn" id="clearBtn" data-i18n="clear">清空</button>
+  <button class="btn" id="cirBtn" data-i18n="export.cir" data-i18n-title="export.cir.tip" title="下载当前网表 (.cir)">导出 .cir</button>
+  <button class="btn primary" id="simBtn" data-i18n="sim.run">▶ 仿真</button>
+  <button class="btn" id="aiBtn" disabled data-i18n="ai.explain" data-i18n-title="ai.explain.tip" title="用大模型解释最近一次仿真结果（不改电路）">AI 解读</button>
 </header>
 
 <div id="main">
   <div id="palette"></div>
   <div id="stage">
     <div id="previewBar">
-      <span style="color:var(--acc)">🤖 AI 电路预览中</span>
-      <span style="color:var(--dim);font-size:12px">高亮部分为 AI 生成的电路，确认后替换画布（旧图可撤销找回）</span>
+      <span style="color:var(--acc)" data-i18n="preview.title">🤖 AI 电路预览中</span>
+      <span style="color:var(--dim);font-size:12px" data-i18n="preview.hint">高亮部分为 AI 生成的电路，确认后替换画布（旧图可撤销找回）</span>
       <span style="flex:1"></span>
-      <button class="btn primary" id="applyBtn">✓ 应用到画布</button>
-      <button class="btn" id="discardBtn">✗ 丢弃</button>
+      <button class="btn primary" id="applyBtn" data-i18n="preview.apply">✓ 应用到画布</button>
+      <button class="btn" id="discardBtn" data-i18n="preview.discard">✗ 丢弃</button>
     </div>
     <div id="canvasWrap"><svg id="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 700" preserveAspectRatio="xMidYMid meet"></svg></div>
     <div id="status"></div>
   </div>
   <div id="side">
-    <div id="roundsBox"><b>会话轮次</b><div id="roundsList" class="hints" style="margin-top:6px"></div></div>
+    <div id="roundsBox"><b data-i18n="timeline.draw">会话轮次</b><div id="roundsList" class="hints" style="margin-top:6px"></div></div>
     <div id="props">
-      <b style="font-size:13.5px">属性</b>
-      <div id="propBody" class="hints" style="margin-top:6px">点击画布上的元件进行编辑。<br>点元件引脚（蓝点）开始连线，再点另一引脚或导线结束。</div>
+      <b style="font-size:13.5px" data-i18n="props">属性</b>
+      <div id="propBody" class="hints" style="margin-top:6px" data-i18n-html="props.empty">点击画布上的元件进行编辑。<br>点元件引脚（蓝点）开始连线，再点另一引脚或导线结束。</div>
     </div>
   </div>
 </div>
@@ -60,12 +64,13 @@
 
 <div id="aiBar">
   <span id="aiStageLine"></span>
-  <textarea id="aiInput" rows="1" placeholder="用自然语言画一个电路，如：设计一个截止频率 1kHz 的 RC 低通滤波器"></textarea>
-  <button id="aiSend" title="AI 生成/修改电路：LLM 出网表并经 ngspice 验证后布局到画布（预览确认）">🤖 AI 画 / 改</button>
-  <button class="btn" id="undoBtn" title="撤销最近一次 AI 应用，找回之前的画布">↶ 撤销AI</button>
+  <textarea id="aiInput" rows="1" data-i18n-placeholder="ai.placeholder.empty" placeholder="用自然语言画一个电路，如：设计一个截止频率 1kHz 的 RC 低通滤波器"></textarea>
+  <button id="aiSend" data-i18n="ai.send" data-i18n-title="ai.sendTip" title="AI 生成/修改电路：LLM 出网表并经 ngspice 验证后布局到画布（预览确认）">🤖 AI 画 / 改</button>
+  <button class="btn" id="undoBtn" data-i18n="ai.undo" data-i18n-title="ai.undoTip" title="撤销最近一次 AI 应用，找回之前的画布">↶ 撤销AI</button>
 </div>
 
-<script src="proof.js?v=0.4.0-qa2"></script>
-<script src="board.js?v=0.4.0-qa2"></script>
+<script src="i18n.js?v=0.4.0-i18n"></script>
+<script src="proof.js?v=0.4.0-i18n"></script>
+<script src="board.js?v=0.4.0-i18n"></script>
 </body>
 </html>

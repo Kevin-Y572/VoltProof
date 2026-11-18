@@ -12,6 +12,7 @@ import html
 import json
 from pathlib import Path
 
+from . import i18n
 from .workspace import Workspace
 
 _STYLE = """\
@@ -62,55 +63,56 @@ def _round_html(ws: Workspace, idx: int, request: str, ev: dict) -> str:
     docs = ws.resolve(Path("docs") / task_id) if task_id else None
     ok = bool(ev.get("ok"))
     rejected = bool(ev.get("rejected"))
-    parts = [f'<h2>第 {idx} 轮 · {_e(request[:80])}</h2>']
+    parts = [f'<h2>{_e(i18n.t("report.round", n=idx, req=request[:80]))}</h2>']
     if rejected:
-        parts.append('<p class="verdict-fail">超出能力范围（前置拒绝，未消耗生成与仿真）</p>')
+        parts.append(f'<p class="verdict-fail">{_e(i18n.t("report.rejected"))}</p>')
         parts.append(f'<div class="interp">{_e(ev.get("interpretation", ""))}</div>')
         return "\n".join(parts)
-    verdict = {"passed":"✅ 指标达标", "simulated":"仿真完成，尚未设置验收目标",
-               "incomplete":"验证不完整", "failed":"未通过验证", "cancelled":"任务已取消",
-               "explained":"电路解读"}.get(ev.get("verdict"), "历史结果，目标验收状态未知")
+    verdict_key = {"passed":"verdict.passed", "simulated":"verdict.simulated",
+                   "incomplete":"verdict.incomplete", "failed":"verdict.failed",
+                   "cancelled":"verdict.cancelled", "explained":"verdict.explained"}.get(ev.get("verdict"))
+    verdict = i18n.t(verdict_key) if verdict_key else i18n.t("report.legacy")
     cls = "verdict-ok" if ok else "verdict-fail"
     retries = [r for r in ev.get("retry_log") or []
                if r.get("stage") not in ("generate", "attach")]
-    parts.append(f'<p class="{cls}">{verdict}'
-                 f'<span class="dim"> · 耗时 {_e(ev.get("elapsed"))}s · 修复环 {len(retries)} 轮</span></p>')
+    parts.append(f'<p class="{cls}">{_e(verdict)}'
+                 f'<span class="dim">{_e(i18n.t("report.elapsed", s=ev.get("elapsed"), n=len(retries)))}</span></p>')
     checks = ev.get("checks") or []
     if checks:
         rows = "".join(
             f"<tr><td>{'✓' if c.get('ok') else '未验证' if c.get('ok') is None else '✗'}</td><td>{_e(c.get('name'))}</td>"
             f"<td>{_e(c.get('detail'))}<br>{_e(c.get('window'))}</td></tr>" for c in checks)
-        parts.append(f"<table><tr><th>判定</th><th>检查项</th><th>实测</th></tr>{rows}</table>")
+        parts.append(f"<table><tr><th>{_e(i18n.t('report.judge'))}</th><th>{_e(i18n.t('report.check'))}</th><th>{_e(i18n.t('check.col.measured'))}</th></tr>{rows}</table>")
     metrics = ev.get("metrics") or {}
     if metrics:
         rows = "".join(f"<tr><td>{_e(k)}</td><td>{_e(v)}</td></tr>"
                        for k, v in list(metrics.items())[:14])
-        parts.append(f"<table><tr><th>实测指标</th><th>数值</th></tr>{rows}</table>")
+        parts.append(f"<table><tr><th>{_e(i18n.t('chat.metrics'))}</th><th>{_e(i18n.t('report.value'))}</th></tr>{rows}</table>")
     if docs:
         sch = _img_tag(docs / "schematic.png")
         if sch:
-            parts.append(f'<p class="dim">原理图（自动布局）</p>{sch}')
+            parts.append(f'<p class="dim">{_e(i18n.t("report.schematic"))}</p>{sch}')
         wave = _img_tag(docs / "wave.png")
         if wave:
-            parts.append(f'<p class="dim">仿真波形</p>{wave}')
+            parts.append(f'<p class="dim">{_e(i18n.t("report.wave"))}</p>{wave}')
     interp = ev.get("interpretation") or ""
     if interp:
         parts.append(f'<div class="interp">{_e(interp)}</div>')
     netlist = ev.get("netlist") or ""
     if netlist:
-        parts.append(f'<p class="dim">网表（ngspice，可直接复现）</p><pre>{_e(netlist)}</pre>')
+        parts.append(f'<p class="dim">{_e(i18n.t("report.netlist"))}</p><pre>{_e(netlist)}</pre>')
     if ev.get("version_id"):
-        parts.append(f'<p class="dim">电路版本：{_e(ev["version_id"])} · 证据编号：{_e(task_id)}</p>')
+        parts.append(f'<p class="dim">{_e(i18n.t("report.version", id=ev["version_id"], task=task_id))}</p>')
     for warning in ev.get("warnings", []):
-        parts.append(f'<p class="verdict-fail">{_e(warning)}</p>')
+        parts.append(f'<p class="verdict-fail">{_e(i18n.translate(warning))}</p>')
     if ev.get("provenance"):
-        parts.append(f'<details><summary>复现信息</summary><pre>{_e(json.dumps(ev["provenance"], ensure_ascii=False, indent=2))}</pre></details>')
+        parts.append(f'<details><summary>{_e(i18n.t("report.provenance"))}</summary><pre>{_e(json.dumps(ev["provenance"], ensure_ascii=False, indent=2))}</pre></details>')
     comparison=ev.get("comparison") or {}
     if comparison:
         rows=''.join(f'<tr><td>{_e(m.get("name"))}</td><td>{_e(m.get("left"))}</td><td>{_e(m.get("right"))}</td><td>{_e(m.get("delta"))}</td></tr>' for m in comparison.get("measurements", []))
-        parts.append(f'<p class="dim">{_e(comparison.get("note"))}</p><table><tr><th>指标</th><th>之前</th><th>之后</th><th>变化</th></tr>{rows}</table>')
+        parts.append(f'<p class="dim">{_e(i18n.translate(comparison.get("note") or ""))}</p><table><tr><th>{_e(i18n.t("check.col.metric"))}</th><th>{_e(i18n.t("report.before"))}</th><th>{_e(i18n.t("report.after"))}</th><th>{_e(i18n.t("report.delta"))}</th></tr>{rows}</table>')
     if ev.get("changes"):
-        parts.append(f'<details><summary>元件与网表修改</summary><pre>{_e(ev["changes"])}</pre></details>')
+        parts.append(f'<details><summary>{_e(i18n.t("report.changes"))}</summary><pre>{_e(ev["changes"])}</pre></details>')
     return "\n".join(parts)
 
 
@@ -136,15 +138,12 @@ def build_report_html(conv: dict, ws: Workspace) -> str:
 
     n_ok = sum(1 for _r, ev in rounds if ev.get("ok") and not ev.get("rejected"))
     head = [
-        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">",
-        f"<title>{_e(conv.get('title') or 'VoltProof 实验报告')}</title>",
+        f"<!doctype html><html lang=\"{_e(i18n.current())}\"><head><meta charset=\"utf-8\">",
+        f"<title>{_e(conv.get('title') or i18n.t('report.title'))}</title>",
         f"<style>{_STYLE}</style></head><body>",
-        "<h1>VoltProof 实验报告</h1>",
-        f'<div class="meta">课题：{_e(conv.get("title") or "（无标题）")} · '
-        f"{len(rounds)} 轮设计/验证 · 通过 {n_ok} 轮 · "
-        f"导出时间 {_t.strftime('%Y-%m-%d %H:%M')}</div>",
-        '<p class="dim">波形与性能指标由 ngspice 仿真数据计算；元件参数按网表检查。每轮附完整网表，'
-        "可在相同 ngspice 版本与模型条件下复现。</p>",
+        f"<h1>{_e(i18n.t('report.title'))}</h1>",
+        f'<div class="meta">{_e(i18n.t("report.meta", title=conv.get("title") or i18n.t("report.untitled"), rounds=len(rounds), ok=n_ok, when=_t.strftime("%Y-%m-%d %H:%M")))}</div>',
+        f'<p class="dim">{_e(i18n.t("report.blurb"))}</p>',
     ]
     body = [_round_html(ws, i + 1, req, ev) for i, (req, ev) in enumerate(rounds)]
     return "\n".join(head + body + ["</body></html>"])
@@ -155,11 +154,11 @@ def build_project_report(ws: Workspace, version_id=None) -> str:
     p = ws.load_project()
     version_id = version_id or p.get("version_id")
     selected = project.read_version(ws, version_id) if version_id else None
-    title = p.get("name") or "未命名项目"
-    parts = [f'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>{_e(title)} 项目报告</title>',
-             f'<style>{_STYLE}</style><body><h1>VoltProof 项目实验报告</h1><p>{_e(title)}</p>']
+    title = p.get("name") or i18n.t("report.unnamed")
+    parts = [f'<!doctype html><html lang="{_e(i18n.current())}"><meta charset="utf-8"><title>{_e(i18n.t("report.projectTitle", title=title))}</title>',
+             f'<style>{_STYLE}</style><body><h1>{_e(i18n.t("report.project"))}</h1><p>{_e(title)}</p>']
     if p.get("dirty"):
-        parts.append('<p class="verdict-fail">当前画布有未验证修改；本报告中的证据对应下面注明的已保存版本。</p>')
+        parts.append(f'<p class="verdict-fail">{_e(i18n.t("report.dirty"))}</p>')
     if selected:
         parts.append(f'<p>选择的电路版本：{_e(selected["id"])}；来源：{_e(selected.get("source"))}</p>')
         ev = _archived_evidence(ws, selected.get("evidence_id", ""))
@@ -186,9 +185,12 @@ def build_project_report(ws: Workspace, version_id=None) -> str:
             d = json.loads(scan.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        parts.append(f'<h2>参数扫描：{_e(d.get("component"))}</h2><p class="dim">基于版本 {_e(d.get("version_id"))}</p>')
-        rows = ''.join(f'<tr><td>{_e(pt.get("value"))}</td><td>{_e(pt.get("metric"))}</td><td>{"达标" if pt.get("passed") is True else "未达标" if pt.get("passed") is False else "未设置目标"}</td></tr>' for pt in d.get("points", []))
-        parts.append(f'<table><tr><th>参数</th><th>{_e(d.get("metric_name"))}</th><th>目标验收</th></tr>{rows}</table>')
+        from .whatif import chart_title, metric_label
+        metric = str(d.get("metric") or "")
+        label = metric_label(metric) if metric else i18n.translate(str(d.get("metric_name") or ""))
+        parts.append(f'<h2>{_e(i18n.t("report.scan", comp=d.get("component")))}</h2><p class="dim">{_e(chart_title(str(d.get("component") or ""), metric) if metric else "")} {_e(i18n.t("report.scanBase", id=d.get("version_id")))}</p>')
+        rows = ''.join(f'<tr><td>{_e(pt.get("value"))}</td><td>{_e(pt.get("metric"))}</td><td>{_e(i18n.t("report.hit") if pt.get("passed") is True else i18n.t("report.miss") if pt.get("passed") is False else i18n.t("report.notarget"))}</td></tr>' for pt in d.get("points", []))
+        parts.append(f'<table><tr><th>{_e(i18n.t("report.param"))}</th><th>{_e(label)}</th><th>{_e(i18n.t("report.accept"))}</th></tr>{rows}</table>')
         parts.append(_img_tag(folder / "whatif.png"))
     parts.append(_pcb_section(ws))
     parts.append('</body></html>')

@@ -27,71 +27,90 @@
   .verdict { font-weight:600; margin-top:8px; }
   .verdict.ok { color:var(--ok); } .verdict.fail { color:var(--warn); }
   .note { color:var(--dim); font-size:12px; margin-top:12px; }
+  .top { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; }
+  .lang-switch { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; flex:none; }
+  .lang-btn { background:var(--card); color:var(--dim); border:none; padding:4px 10px; font-size:12px; cursor:pointer; }
+  .lang-btn + .lang-btn { border-left:1px solid var(--line); }
+  .lang-btn.on { background:#1d2b45; color:var(--text); }
 </style>
 </head>
-<body>
-<h1>同题对照：同一个问题，两种回答</h1>
-<div class="sub">左侧：直接问大模型（只得到文字） · 右侧：VoltProof（每个数字都来自 ngspice 实测）。右侧在临时工作区运行，不会替换当前项目电路。</div>
+<body data-title-key="doc.title.compare">
+<div class="top">
+  <h1 data-i18n="cmp.page.title">同题对照：同一个问题，两种回答</h1>
+  <div class="lang-switch" role="group" data-i18n-aria="lang.group" aria-label="界面语言">
+    <button type="button" class="lang-btn" data-set-lang="zh-CN">中文</button>
+    <button type="button" class="lang-btn" data-set-lang="en">English</button>
+  </div>
+</div>
+<div class="sub" data-i18n="cmp.page.sub">左侧：直接问大模型（只得到文字） · 右侧：VoltProof（每个数字都来自 ngspice 实测）。右侧在临时工作区运行，不会替换当前项目电路。</div>
 
 <div class="bar">
   <input id="q" value="设计一个截止频率1kHz的RC低通滤波器，并告诉我它的实际增益特性">
-  <button id="run" onclick="runBoth()">运行对照</button>
+  <button id="run" data-i18n="cmp.page.run">运行对照</button>
 </div>
 
 <div class="cols">
   <div class="panel left">
-    <h2>直接问 AI</h2>
-    <div class="status" id="l-status">等待运行</div>
+    <h2 data-i18n="cmp.page.left">直接问 AI</h2>
+    <div class="status" id="l-status" data-i18n="cmp.page.wait">等待运行</div>
     <div id="l-body"></div>
   </div>
   <div class="panel right">
-    <h2>VoltProof（仿真在环）</h2>
-    <div class="status" id="r-status">等待运行</div>
+    <h2 data-i18n="cmp.page.right">VoltProof（仿真在环）</h2>
+    <div class="status" id="r-status" data-i18n="cmp.page.wait">等待运行</div>
     <div id="r-body"></div>
   </div>
 </div>
-<div class="note">提示：把左侧给出的电路拿到 ngspice 里跑，参数可能是编的；右侧电路经过了真实仿真，指标是算出来的。这次演示不写入当前项目；要留下电路，请回到工作台重新运行。</div>
+<div class="note" data-i18n="cmp.page.note">提示：把左侧给出的电路拿到 ngspice 里跑，参数可能是编的；右侧电路经过了真实仿真，指标是算出来的。这次演示不写入当前项目；要留下电路，请回到工作台重新运行。</div>
 
+<script src="i18n.js?v=0.4.0-i18n"></script>
 <script>
+const t = (k, v) => VPI18n.t(k, v);
+const tr = s => VPI18n.tr(s);
+let last = null;
+document.getElementById('run').addEventListener('click', runBoth);
 async function runBoth() {
   const q = document.getElementById('q').value.trim();
   const runBtn = document.getElementById('run');
   if (!q) return;
   runBtn.disabled = true;
-  lStatus('请求中…'); rStatus('临时工作区仿真中，不会改当前项目…');
+  lStatus(t('cmp.page.leftWait')); rStatus(t('cmp.page.rightWait'));
   document.getElementById('l-body').innerHTML = '';
   document.getElementById('r-body').innerHTML = '';
   const [l, r] = await Promise.allSettled([
     fetch('/demo/raw', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({message: q})}).then(x=>x.json()),
     fetch('/demo/verified', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({message: q})}).then(x=>x.json()),
   ]);
-  // 左：裸模型
+  last = { l, r };
+  paint(l, r);
+  runBtn.disabled = false;
+}
+function paint(l, r) {
   if (l.status === 'fulfilled' && l.value.text) {
-    lStatus('完成（仅文字，未经验证）');
+    lStatus(t('cmp.page.leftDone'));
     document.getElementById('l-body').innerHTML = `<pre>${escapeHtml(l.value.text)}</pre>`;
-  } else { lStatus('失败'); }
-  // 右：临时工作区里的仿真，不采用到当前项目
+  } else { lStatus(t('cmp.page.fail')); }
   if (r.status === 'fulfilled' && !r.value.error) {
     const d = r.value;
     const kept = d.demo === true && d.applied === false;
-    rStatus(`完成 · ${d.elapsed}s${kept ? ' · 未改当前项目' : ''}`);
-    const metrics = Object.entries(d.metrics||{}).map(([k,v])=>`<span class="metric">${k} <b>${v}</b></span>`).join('');
+    rStatus(t('cmp.page.rightDone', {s: d.elapsed}) + (kept ? t('cmp.page.kept') : ''));
+    const metrics = Object.entries(d.metrics||{}).map(([k,v])=>`<span class="metric">${escapeHtml(k)} <b>${escapeHtml(v)}</b></span>`).join('');
     const wave = d.waveform_b64 ? `<img class="wave" src="data:image/png;base64,${d.waveform_b64}">` : '';
     const checks = d.checks || [];
     const checksHtml = checks.length
       ? `<div style="margin-top:8px">${checks.map(c =>
-          `<span class="metric" style="${c.ok ? '' : 'border-color:var(--warn)'}">${c.ok ? '✅' : '❌'} ${escapeHtml(c.name)}</span>`).join('')}</div>` : '';
+          `<span class="metric" style="${c.ok ? '' : 'border-color:var(--warn)'}">${c.ok ? '✅' : '❌'} ${escapeHtml(tr(c.name))}</span>`).join('')}</div>` : '';
     document.getElementById('r-body').innerHTML =
-      `<div class="verdict ${d.ok?'ok':'fail'}">${d.ok?'✅ 仿真验证通过':'⚠️ 未通过'}</div>`
-      + (d.note ? `<div class="note">${escapeHtml(d.note)}</div>` : '')
+      `<div class="verdict ${d.ok?'ok':'fail'}">${d.ok?escapeHtml(t('cmp.page.pass')):escapeHtml(t('cmp.page.miss'))}</div>`
+      + (d.note ? `<div class="note">${escapeHtml(tr(d.note))}</div>` : '')
       + `${metrics}${wave}${checksHtml}`
       + (d.netlist ? `<pre>${escapeHtml(d.netlist)}</pre>` : '');
   } else {
-    const msg = r.status === 'fulfilled' ? (r.value.error || '失败') : '失败';
+    const msg = r.status === 'fulfilled' ? (tr(r.value.error) || t('cmp.page.fail')) : t('cmp.page.fail');
     rStatus(msg);
   }
-  runBtn.disabled = false;
 }
+document.addEventListener('vp-lang', () => { if (last) paint(last.l, last.r); });
 
 function lStatus(t){ document.getElementById('l-status').textContent = t; }
 function rStatus(t){ document.getElementById('r-status').textContent = t; }

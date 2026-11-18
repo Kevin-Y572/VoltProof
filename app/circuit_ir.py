@@ -26,6 +26,7 @@ from __future__ import annotations
 import re
 
 from . import checks as _checks
+from . import i18n
 
 IR_VERSION = 2
 
@@ -161,14 +162,13 @@ def netlist_to_ir(netlist: str) -> dict:
         block_reason = ""
         if role == "stimulus" and _is_zero_source(line, kind, len(el_nets)):
             role = "blocked"
-            note = "0V 电压源通常作电流检测用：不是实物器件，也不能未经验证直接删除；" \
-                   "请改用测试点/串联电阻取样并重新仿真（PCB 方案 §4.2）"
+            note = i18n.t("api.block.zero")
             block_reason = note  # blocked 展示取 block_reason 优先，须同步覆盖
         elements.append({
             "ref": name, "kind": kind, "value": value,
             "nets": list(el_nets), "role": role, "note": note,
             "text": re.sub(r"\s+", " ", line.strip()),  # 电气哈希/审计用原始语义
-            "block_reason": (block_reason or _BLOCK_REASONS.get(kind, "未知元件类型"))
+            "block_reason": (block_reason or (i18n.t("api.block." + kind) if i18n.t("api.block." + kind) != "api.block." + kind else i18n.t("api.block.unknown")))
             if role == "blocked" else "",
         })
         nets.update(el_nets)

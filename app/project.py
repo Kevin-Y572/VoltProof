@@ -9,6 +9,8 @@ import time
 import uuid
 from pathlib import Path
 
+from . import i18n
+
 _locks: dict[str, threading.RLock] = {}
 _locks_guard = threading.Lock()
 
@@ -33,13 +35,13 @@ def revision(p: dict) -> int:
 
 def _check(p, expected):
     if expected is not None and revision(p) != expected:
-        raise Conflict("项目已被其他操作更新，请重新载入后再应用；当前结果已保留为候选版本")
+        raise Conflict(i18n.t("api.conflict_apply"))
 
 
 def active_netlist(p: dict, verified: bool = False) -> str:
     if p.get("dirty"):
         if verified:
-            raise Conflict("画布已修改，尚未重新验证。请先仿真，再运行扫描或解读")
+            raise Conflict(i18n.t("api.conflict_dirty"))
         return p.get("draft_netlist") or ""
     return p.get("netlist") or ""
 
@@ -85,7 +87,7 @@ def edit_digest(key, value):
 
 def _version_path(ws, version_id):
     if not isinstance(version_id, str) or len(version_id) > 64 or not version_id or any(c not in "0123456789abcdef" for c in version_id):
-        raise ValueError("电路版本编号非法")
+        raise ValueError(i18n.t("api.version_bad"))
     return ws.resolve(Path(".cp") / "versions" / f"{version_id}.json")
 
 
@@ -94,7 +96,7 @@ def read_version(ws, version_id):
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
-        raise ValueError("电路版本不存在或已损坏") from e
+        raise ValueError(i18n.t("api.version_missing")) from e
 
 
 def candidate(ws, evidence: dict, canvas, base_revision: int, *, analysis=...) -> dict:
@@ -118,7 +120,7 @@ def apply(ws, version_id: str, expected=None) -> dict:
     with lock(ws):
         v = read_version(ws, version_id)
         if not v.get("ok"):
-            raise ValueError("此候选版本未完成验证，不能采用")
+            raise ValueError(i18n.t("api.candidate_bad"))
         p = ws.load_project()
         _check(p, v["base_revision"])
         _check(p, expected)
@@ -190,7 +192,7 @@ def compare(ws, left_id, right_id):
                      "left":av,"right":bv,"delta":bv-av if av is not None and bv is not None else None})
     return {"left_id":left_id,"right_id":right_id,"measurements":rows,
             "left_verdict":a.get("verdict", "incomplete"),"right_verdict":b.get("verdict", "incomplete"),
-            "note":"比较的是各版本已保存的证据；没有重新统一输入、负载与测量工况，请同时核对各版本验收条件。",
+            "note": i18n.t("api.cmp_note"),
             "changes":"\n".join(difflib.unified_diff(left.get("netlist", "").splitlines(),right.get("netlist", "").splitlines(),
                  fromfile=left_id[:8],tofile=right_id[:8],lineterm=""))}
 

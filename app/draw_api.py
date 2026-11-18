@@ -17,7 +17,7 @@ import json
 import time
 from pathlib import Path
 
-from . import checks, llm, measure, prompts, specs, project
+from . import checks, i18n, llm, measure, prompts, specs, project
 from .ngspice_runner import check_netlist_safety, run_netlist
 from .render_wave import render_wave
 
@@ -49,8 +49,8 @@ def verify_drawn(netlist: str, title: str, workspace, *, requirements=None, expe
                     "provenance": {"netlist_hash": project.digest(netlist), "measurement_version": specs.VERSION,
                                    "created": time.strftime("%Y-%m-%d %H:%M:%S")}}
     if len(netlist) > _NETLIST_LIMIT:
-        result.update(stage="safety", errors=[f"网表超过 {_NETLIST_LIMIT // 1024}KB 限制"],
-                      error="网表过大", hint="元件数量异常，请检查画布")
+        result.update(stage="safety", errors=[i18n.t("api.netlist_big", kb=_NETLIST_LIMIT // 1024)],
+                      error=i18n.t("api.netlist_big_short"), hint=i18n.t("api.netlist_big_hint"))
         return result
 
     tid = workspace.new_task_id()
@@ -67,24 +67,23 @@ def verify_drawn(netlist: str, title: str, workspace, *, requirements=None, expe
     # 1. 安全门（画板网表是客户端任意输入，与附件网表同级信任）
     problems = check_netlist_safety(netlist)
     if problems:
-        return _fail("safety", problems, "网表未通过安全检查", "画板生成的网表不应包含外部命令")
+        return _fail("safety", problems, i18n.t("api.safety_fail"), i18n.t("api.safety_hint"))
 
     # 2. 静态检查：浮空节点/无地/值语法——画板最常见的接线错误在这里拦下
     chk = checks.run_checks(netlist)
     result["validation"]["static"] = "passed" if chk.ok else "failed"
     if not chk.ok:
-        return _fail("checks", list(chk.errors), "电路检查未通过",
-                     "按错误提示回到画布连线；每个元件引脚都要接到网络，且电路必须有接地")
+        return _fail("checks", list(chk.errors), i18n.t("api.check_fail"), i18n.t("api.check_hint"))
 
     # 3. 仿真
     sim = run_netlist(netlist, workdir=sim_dir)
     result["validation"]["simulation"] = "passed" if sim.ok else "failed"
     if not sim.ok:
-        return _fail("simulate", [sim.error_snippet or "仿真失败且无报错文本"],
-                     sim.error_snippet or "仿真失败", _sim_hint(sim.error_snippet))
+        return _fail("simulate", [sim.error_snippet or i18n.t("api.sim_no_text")],
+                     sim.error_snippet or i18n.t("api.sim_fail"), _sim_hint(sim.error_snippet))
     if sim.raw_path is None:
-        return _fail("simulate", ["仿真通过但没有产出波形数据"],
-                     "无波形数据", "检查仿真类型与分析参数是否匹配（如交流扫描需要 AC 源）")
+        return _fail("simulate", [i18n.t("api.no_wave")],
+                     i18n.t("api.no_wave_short"), i18n.t("api.no_wave_hint"))
 
     # 4. 指标 + 图
     tr = None
@@ -98,12 +97,12 @@ def verify_drawn(netlist: str, title: str, workspace, *, requirements=None, expe
     except Exception as e:
         result["verdict"] = "incomplete"
         result["validation"]["measurement"] = "failed"
-        return _fail("measure", [f"波形解析失败: {e}"], "验证证据不完整", "请检查输出数据后重新仿真")
+        return _fail("measure", [i18n.t("api.parse_wave", msg=e)], i18n.t("api.evidence_bad"), i18n.t("api.evidence_hint"))
     try:
         result["waveform_b64"] = _b64_png(render_wave(tr, doc_dir / "wave.png",
                                                       title=title[:40]))
     except Exception as e:
-        result["warnings"].append(f"波形图片生成失败：{e}")
+        result["warnings"].append(i18n.t("api.wave_png", msg=e))
     result["checks"] = specs.evaluate(tr, requirements, netlist)
     failed_checks = [c for c in result["checks"] if not c.get("ok")]
     if failed_checks:
@@ -112,8 +111,8 @@ def verify_drawn(netlist: str, title: str, workspace, *, requirements=None, expe
         result["validation"]["requirements"] = result["verdict"]
         result["stage"] = "verify"
         result["errors"] = [c["detail"] for c in failed_checks]
-        result["error"] = "目标尚未达标"
-        result["hint"] = "按验收明细调整电路后重新仿真"
+        result["error"] = i18n.t("api.target_miss")
+        result["hint"] = i18n.t("api.target_hint")
     else:
         result["ok"] = True
         result["verdict"] = "passed" if result["checks"] else "simulated"
@@ -149,14 +148,14 @@ def _sim_hint(err: str) -> str:
     """把常见 ngspice 报错翻译成画板动作提示（不改网表，指路即可）。"""
     e = (err or "").lower()
     if "singular matrix" in e or "no dc path" in e or "floating" in e:
-        return "存在与地没有直流通路的节点：检查每个节点是否经元件连到地（电容隔直的节点加大电阻接地）"
+        return i18n.t("api.hint.singular")
     if "timestep" in e:
-        return "瞬态步长失败：常见于开关突变或增益过大引起的振荡发散，先减小仿真时长或检查反馈极性"
+        return i18n.t("api.hint.timestep")
     if "undefined" in e and "model" in e:
-        return "元件缺少模型：删除后重新放置该元件（画板会自动补教学模型）"
+        return i18n.t("api.hint.model")
     if "iteration" in e or "converge" in e:
-        return "直流工作点不收敛：常见原因是正反馈或电源直接短路，检查连线"
-    return "回到画布检查连线与元件值，报错原文见上方"
+        return i18n.t("api.hint.converge")
+    return i18n.t("api.hint.generic")
 
 
 def _evidence(result: dict, title: str, tid: str) -> "object":
@@ -202,10 +201,10 @@ def interpret_drawn(workspace, task_id=None) -> dict:
         from .pipeline import _load_archived_evidence
         bound_evidence = _load_archived_evidence(workspace, task_id)
         if not bound_evidence or not bound_evidence.get("ok"):
-            return {"error": "该次仿真没有完整证据，暂时不能解读"}
+            return {"error": i18n.t("api.evidence_incomplete")}
         netlist = bound_evidence.get("netlist")
     if not netlist:
-        return {"error": "本项目还没有验证通过的电路——先点「仿真」再解读"}
+        return {"error": i18n.t("api.no_verified")}
     metrics: dict = {}
     latest_tid = task_id or proj.get("evidence_id")
     for t in workspace.list_tasks(limit=50):  # 新任务在前
@@ -232,7 +231,7 @@ def interpret_drawn(workspace, task_id=None) -> dict:
                                                 (bound_evidence or {}).get("verdict", "incomplete")),
                         thinking=False)
     except llm.LLMError as e:
-        return {"error": f"大模型不可用：{e}（可在主页 ⚙ 模型 里配置）"}
+        return {"error": i18n.t("api.llm_down_cfg", msg=e)}
     # 回写任务档案，实验报告随之完整
     if latest_tid:
         _patch_archived_interpretation(latest_tid, text, workspace)

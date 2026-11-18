@@ -55,6 +55,7 @@ python scripts/test_isolated.py
 # 4. 启动
 uvicorn app.main:app --reload
 # 浏览器打开 http://127.0.0.1:8000（一体化工作台：左画布右对话）
+# 顶栏可在「中文 / English」之间切换工作台界面；默认仍是简体中文
 # 独立画板页（无需配模型）：http://127.0.0.1:8000/draw.html
 # 同题对照演示：http://127.0.0.1:8000/compare.html
 # 也可 pip install . 后直接运行 voltproof 命令（自动挑端口并开浏览器）

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>VoltProof —— 电路仿真实验助手</title>
 <link rel="icon" href="/favicon.ico">
-<link rel="stylesheet" href="board.css?v=0.4.0-qa2">
+<link rel="stylesheet" href="board.css?v=0.4.0-i18n">
 <link rel="stylesheet" href="pcb.css?v=1">
 <style>
   /* 统一主页：在画板骨架（board.css）上加第 4 列「对话面板」——
@@ -45,116 +45,120 @@
   }
 </style>
 </head>
-<body>
+<body data-title-key="doc.title">
 <header>
   <div class="head-main">
   <h1>⚡ VoltProof</h1>
-  <span class="tagline">每一份回答都附带仿真证据 · ngspice 验证</span>
-  <input id="title" type="text" value="未命名电路" title="电路名称（进入对话历史与实验报告）">
-  <label style="color:var(--dim);font-size:12px">仿真类型</label>
+  <span class="tagline" data-i18n="tagline">每一份回答都附带仿真证据 · ngspice 验证</span>
+  <input id="title" type="text" value="未命名电路" data-i18n-title="title.tip" title="电路名称（进入对话历史与实验报告）">
+  <label style="color:var(--dim);font-size:12px" data-i18n="analysis.label">仿真类型</label>
   <select id="analysis">
-    <option value="op">直流工作点</option>
-    <option value="tran" selected>瞬态</option>
-    <option value="ac">交流扫描</option>
+    <option value="op" data-i18n="analysis.op">直流工作点</option>
+    <option value="tran" selected data-i18n="analysis.tran">瞬态</option>
+    <option value="ac" data-i18n="analysis.ac">交流扫描</option>
   </select>
   <span id="anParams" style="display:flex;gap:6px;align-items:center">
-    <input id="tstop" type="text" value="10m" title="瞬态仿真时长" style="width:64px">
+    <input id="tstop" type="text" value="10m" data-i18n-title="analysis.tstop" title="瞬态仿真时长" style="width:64px">
     <span id="acBox" style="display:none;gap:6px;align-items:center">
-      <input id="fstart" type="text" value="10" title="起始频率" style="width:56px">
+      <input id="fstart" type="text" value="10" data-i18n-title="analysis.fstart" title="起始频率" style="width:56px">
       <span style="color:var(--dim)">→</span>
-      <input id="fstop" type="text" value="100k" title="终止频率" style="width:64px">
+      <input id="fstop" type="text" value="100k" data-i18n-title="analysis.fstop" title="终止频率" style="width:64px">
     </span>
   </span>
-  <button class="btn" id="demoBtn" title="载入示例 RC 低通滤波器">示例</button>
-  <button class="btn" id="clearBtn">清空</button>
-  <button class="btn" id="cirBtn" title="下载当前网表 (.cir)">导出 .cir</button>
-  <button class="btn primary" id="simBtn">▶ 仿真</button>
-  <button class="btn" id="aiBtn" disabled title="用大模型解释最近一次仿真结果（不改电路）">AI 解读</button>
+  <button class="btn" id="demoBtn" data-i18n="demo" data-i18n-title="demo.tip" title="载入示例 RC 低通滤波器">示例</button>
+  <button class="btn" id="clearBtn" data-i18n="clear">清空</button>
+  <button class="btn" id="cirBtn" data-i18n="export.cir" data-i18n-title="export.cir.tip" title="下载当前网表 (.cir)">导出 .cir</button>
+  <button class="btn primary" id="simBtn" data-i18n="sim.run">▶ 仿真</button>
+  <button class="btn" id="aiBtn" disabled data-i18n="ai.explain" data-i18n-title="ai.explain.tip" title="用大模型解释最近一次仿真结果（不改电路）">AI 解读</button>
   </div>
   <div class="head-tools">
-  <span id="wsInfo" title="点击切换工作区" style="cursor:pointer;color:var(--acc);font-size:12px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
-  <button id="llmBtn" title="大模型设置（供应商 / API Key / 模型）" class="hbtn">⚙ 模型</button>
-  <button id="pcbBtn" title="PCB 导出（实验性）：验证过的电路 → 器件映射 → 自动布线 → DRC → 制板文件" class="hbtn">🔲 PCB</button>
-  <button id="histBtn" title="对话历史" class="hbtn">对话</button>
+  <div class="lang-switch" role="group" data-i18n-aria="lang.group" aria-label="界面语言">
+    <button type="button" class="lang-btn" data-set-lang="zh-CN">中文</button>
+    <button type="button" class="lang-btn" data-set-lang="en">English</button>
+  </div>
+  <span id="wsInfo" data-i18n-title="ws.tip" title="点击切换工作区" style="cursor:pointer;color:var(--acc);font-size:12px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+  <button id="llmBtn" data-i18n="model" data-i18n-title="model.tip" title="大模型设置（供应商 / API Key / 模型）" class="hbtn">⚙ 模型</button>
+  <button id="pcbBtn" data-i18n="pcb" data-i18n-title="pcb.tip" title="PCB 导出（实验性）：验证过的电路 → 器件映射 → 自动布线 → DRC → 制板文件" class="hbtn">🔲 PCB</button>
+  <button id="histBtn" data-i18n="hist" data-i18n-title="hist.tip" title="对话历史" class="hbtn">对话</button>
   </div>
 </header>
 
 <div id="tabbar">
-  <button class="btn primary" id="tabDrawBtn">📐 画布</button>
-  <button class="btn" id="tabChatBtn">💬 对话</button>
-  <button class="btn" id="tabPcbBtn">🔲 PCB</button>
+  <button class="btn primary" id="tabDrawBtn" data-i18n="tab.draw">📐 画布</button>
+  <button class="btn" id="tabChatBtn" data-i18n="tab.chat">💬 对话</button>
+  <button class="btn" id="tabPcbBtn" data-i18n="tab.pcb">🔲 PCB</button>
 </div>
 
 <div id="main">
   <div id="palette"></div>
   <div id="stage">
     <div id="previewBar">
-      <span style="color:var(--acc)">🤖 AI 电路预览中</span>
-      <span style="color:var(--dim);font-size:12px">高亮部分为 AI 生成的电路，确认后替换画布（旧图可撤销找回）</span>
+      <span style="color:var(--acc)" data-i18n="preview.title">🤖 AI 电路预览中</span>
+      <span style="color:var(--dim);font-size:12px" data-i18n="preview.hint">高亮部分为 AI 生成的电路，确认后替换画布（旧图可撤销找回）</span>
       <span style="flex:1"></span>
-      <button class="btn primary" id="applyBtn">✓ 应用到画布</button>
-      <button class="btn" id="discardBtn">✗ 丢弃</button>
+      <button class="btn primary" id="applyBtn" data-i18n="preview.apply">✓ 应用到画布</button>
+      <button class="btn" id="discardBtn" data-i18n="preview.discard">✗ 丢弃</button>
     </div>
     <div id="canvasWrap"><svg id="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 700" preserveAspectRatio="xMidYMid meet"></svg></div>
     <div id="status"></div>
   </div>
   <div id="side">
-    <div id="roundsBox"><b>项目时间线</b><div id="roundsList" class="hints" style="margin-top:6px"></div></div>
+    <div id="roundsBox"><b data-i18n="timeline">项目时间线</b><div id="roundsList" class="hints" style="margin-top:6px"></div></div>
     <div id="props">
-      <b style="font-size:13.5px">属性</b>
-      <div id="propBody" class="hints" style="margin-top:6px">点击画布上的元件进行编辑。<br>点元件引脚（蓝点）开始连线，再点另一引脚或导线结束。</div>
+      <b style="font-size:13.5px" data-i18n="props">属性</b>
+      <div id="propBody" class="hints" style="margin-top:6px" data-i18n-html="props.empty">点击画布上的元件进行编辑。<br>点元件引脚（蓝点）开始连线，再点另一引脚或导线结束。</div>
     </div>
   </div>
   <div id="chatPane">
     <div id="chat">
-      <div class="hint">
-        试试：
-        <code onclick="fill('设计一个截止频率1kHz的RC低通滤波器')">RC 低通滤波器</code>
-        <code onclick="fill('用理想运放设计一个增益-10倍的反相放大器，仿真验证')">反相放大器</code>
-        <code onclick="fill('设计桥式整流+电容滤波电路，220V/50Hz降压到12V，纹波<1V')">整流滤波</code>
+      <div class="hint" id="chatHint">
+        <span data-i18n="try">试试：</span>
+        <code data-i18n="ex.rc" data-fill="ex.rc.prompt">RC 低通滤波器</code>
+        <code data-i18n="ex.amp" data-fill="ex.amp.prompt">反相放大器</code>
+        <code data-i18n="ex.rect" data-fill="ex.rect.prompt">整流滤波</code>
         <span id="chipInfo" style="display:none;margin-top:6px;color:var(--acc)"></span>
       </div>
     </div>
     <footer>
       <input type="file" id="file" accept=".cir,.sp,.ckt,.net,.spi,.spice,.txt,.md" hidden>
-      <button id="attach" title="上传网表或文本文件" class="fbtn">📎</button>
-      <button id="whatifBtn" title="what-if 参数扫描：对当前电路改一个元件值，逐点真实仿真看趋势（非 AI 生成）" class="fbtn">🔀</button>
-      <textarea id="input" rows="1" placeholder="围绕当前电路继续讨论…（Enter 发送）"></textarea>
-      <button id="send">发送</button>
+      <button id="attach" data-i18n-title="attach.tip" title="上传网表或文本文件" class="fbtn">📎</button>
+      <button id="whatifBtn" data-i18n-title="whatif.btn" title="what-if 参数扫描：对当前电路改一个元件值，逐点真实仿真看趋势（非 AI 生成）" class="fbtn">🔀</button>
+      <textarea id="input" rows="1" data-i18n-placeholder="chat.placeholder" placeholder="围绕当前电路继续讨论…（Enter 发送）"></textarea>
+      <button id="send" data-i18n="send">发送</button>
     </footer>
   </div>
   <div id="pcbPane">
     <div id="pcbSide">
       <div id="pcbCaps" class="pcbbox"></div>
       <div class="pcbbox">
-        <b style="font-size:13.5px">① 预检当前电路</b>
-        <div class="hint" style="margin:6px 0">从项目已验证的电路出发。激励源的网络须声明为外部端子（将生成连接器）。</div>
+        <b style="font-size:13.5px" data-i18n="pcb.step1">① 预检当前电路</b>
+        <div class="hint" style="margin:6px 0" data-i18n="pcb.step1hint">从项目已验证的电路出发。激励源的网络须声明为外部端子（将生成连接器）。</div>
         <div id="pcbPorts" style="margin:6px 0"></div>
         <div style="display:flex;gap:6px;align-items:center;margin:6px 0;flex-wrap:wrap">
-          <span class="hint">安装：</span>
+          <span class="hint" data-i18n="pcb.mount">安装：</span>
           <select id="pcbMount" style="background:#10131b;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:3px 6px">
-            <option value="tht">直插 THT</option>
-            <option value="smd">贴片 SMD(0805)</option>
+            <option value="tht" data-i18n="pcb.tht">直插 THT</option>
+            <option value="smd" data-i18n="pcb.smd">贴片 SMD(0805)</option>
           </select>
-          <span class="hint">板尺寸：</span>
-          <input id="pcbW" type="text" placeholder="宽mm" style="width:52px;background:#10131b;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:3px 6px">
+          <span class="hint" data-i18n="pcb.size">板尺寸：</span>
+          <input id="pcbW" type="text" data-i18n-placeholder="pcb.w" placeholder="宽mm" style="width:52px;background:#10131b;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:3px 6px">
           <span class="hint">×</span>
-          <input id="pcbH" type="text" placeholder="高mm" style="width:52px;background:#10131b;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:3px 6px">
-          <label class="hint" style="cursor:pointer"><input id="pcbHoles" type="checkbox"> M3 安装孔</label>
+          <input id="pcbH" type="text" data-i18n-placeholder="pcb.h" placeholder="高mm" style="width:52px;background:#10131b;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:3px 6px">
+          <label class="hint" style="cursor:pointer"><input id="pcbHoles" type="checkbox"> <span data-i18n="pcb.holes">M3 安装孔</span></label>
         </div>
         <div style="display:flex;gap:8px;margin-top:6px">
-          <button class="btn" id="pcbPreBtn">预检</button>
-          <button class="btn primary" id="pcbRunBtn">② 生成 PCB</button>
-          <button class="btn" id="pcbCancelBtn" style="display:none">取消</button>
+          <button class="btn" id="pcbPreBtn" data-i18n="pcb.pre">预检</button>
+          <button class="btn primary" id="pcbRunBtn" data-i18n="pcb.run">② 生成 PCB</button>
+          <button class="btn" id="pcbCancelBtn" data-i18n="cancel" style="display:none">取消</button>
         </div>
         <div id="pcbPreOut" class="hint" style="margin-top:8px"></div>
       </div>
       <div class="pcbbox">
-        <b style="font-size:13.5px">③ 版本</b>
+        <b style="font-size:13.5px" data-i18n="pcb.step3">③ 版本</b>
         <div id="pcbVerList" class="hint" style="margin-top:6px"></div>
       </div>
       <div class="pcbbox" id="pcbJobBox" style="display:none">
-        <b style="font-size:13.5px">任务进度</b>
+        <b style="font-size:13.5px" data-i18n="pcb.progress">任务进度</b>
         <div id="pcbJobOut" class="hint" style="margin-top:6px"></div>
       </div>
     </div>
@@ -163,12 +167,12 @@
         <span id="pcbAdjustCount" style="color:var(--acc);font-size:12.5px"></span>
         <span id="pcbSelOps" style="display:flex;gap:6px;align-items:center">
           <span id="pcbSelName" class="hint"></span>
-          <button class="btn" id="pcbRotL" title="选中元件逆时针旋转 90°" disabled>⟲ 90°</button>
-          <button class="btn" id="pcbRotR" title="选中元件顺时针旋转 90°" disabled>⟳ 90°</button>
-          <button class="btn" id="pcbLockBtn" disabled>🔒 锁定</button>
+          <button class="btn" id="pcbRotL" data-i18n-title="pcb.rotL" title="选中元件逆时针旋转 90°" disabled>⟲ 90°</button>
+          <button class="btn" id="pcbRotR" data-i18n-title="pcb.rotR" title="选中元件顺时针旋转 90°" disabled>⟳ 90°</button>
+          <button class="btn" id="pcbLockBtn" data-i18n="pcb.lock" disabled>🔒 锁定</button>
         </span>
-        <button class="btn primary" id="pcbRerouteBtn">🔁 重布线（新候选）</button>
-        <button class="btn" id="pcbAdjustResetBtn">放弃调整</button>
+        <button class="btn primary" id="pcbRerouteBtn" data-i18n="pcb.reroute">🔁 重布线（新候选）</button>
+        <button class="btn" id="pcbAdjustResetBtn" data-i18n="pcb.reset">放弃调整</button>
       </div>
       <div id="pcbViewCap" class="hint"></div></div>
   </div>
@@ -178,15 +182,15 @@
 
 <div id="aiBar">
   <span id="aiStageLine"></span>
-  <textarea id="aiInput" rows="1" placeholder="用自然语言画一个电路，如：设计一个截止频率 1kHz 的 RC 低通滤波器"></textarea>
-  <button id="aiSend" title="AI 生成/修改电路：LLM 出网表并经 ngspice 验证后布局到画布（预览确认）">🤖 AI 画 / 改</button>
-  <button class="btn" id="undoBtn" title="撤销最近一次 AI 应用，找回之前的画布">↶ 撤销AI</button>
+  <textarea id="aiInput" rows="1" data-i18n-placeholder="ai.placeholder.empty" placeholder="用自然语言画一个电路，如：设计一个截止频率 1kHz 的 RC 低通滤波器"></textarea>
+  <button id="aiSend" data-i18n="ai.send" data-i18n-title="ai.sendTip" title="AI 生成/修改电路：LLM 出网表并经 ngspice 验证后布局到画布（预览确认）">🤖 AI 画 / 改</button>
+  <button class="btn" id="undoBtn" data-i18n="ai.undo" data-i18n-title="ai.undoTip" title="撤销最近一次 AI 应用，找回之前的画布">↶ 撤销AI</button>
 </div>
 
 <aside id="histPanel" style="display:none;position:fixed;right:0;top:49px;bottom:66px;width:380px;background:var(--card);border-left:1px solid var(--line);overflow-y:auto;padding:12px;z-index:30">
   <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-    <b>对话历史</b>
-    <button id="newConvBtn" style="background:#1d2b45;border:none;color:var(--acc);border-radius:8px;padding:4px 12px;font-size:12px;cursor:pointer">＋ 新对话</button>
+    <b data-i18n="hist.title">对话历史</b>
+    <button id="newConvBtn" data-i18n="hist.new" style="background:#1d2b45;border:none;color:var(--acc);border-radius:8px;padding:4px 12px;font-size:12px;cursor:pointer">＋ 新对话</button>
   </div>
   <div id="histWs" style="color:var(--dim);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:4px 0"></div>
   <div id="histList"></div>
@@ -194,37 +198,37 @@
 
 <div id="wsDialog" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:40;align-items:center;justify-content:center">
   <div style="background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;width:500px;max-width:92vw">
-    <b>切换工作区</b>
-    <p style="color:var(--dim);font-size:12px;margin:6px 0">输入本地目录的绝对路径。之后所有产物（电路/波形/报告）与会话状态都只保存在该目录内，拷走文件夹即完整归档。</p>
-    <input id="wsInput" style="width:100%;background:#10131b;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;outline:none" placeholder="D:\projects\my-circuits">
+    <b data-i18n="ws.title">切换工作区</b>
+    <p style="color:var(--dim);font-size:12px;margin:6px 0" data-i18n="ws.help">输入本地目录的绝对路径。之后所有产物（电路/波形/报告）与会话状态都只保存在该目录内，拷走文件夹即完整归档。</p>
+    <input id="wsInput" style="width:100%;background:#10131b;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;outline:none" data-i18n-placeholder="ws.placeholder" placeholder="D:\projects\my-circuits">
     <div id="wsRecent" style="margin-top:8px"></div>
     <div id="wsErr" style="color:var(--warn);font-size:12px;margin-top:6px"></div>
     <div style="margin-top:12px;text-align:right">
-      <button id="wsCancelBtn" style="background:var(--card);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:6px 14px;cursor:pointer">取消</button>
-      <button id="wsOpenBtn" style="background:var(--acc);border:none;color:#fff;border-radius:8px;padding:6px 16px;cursor:pointer;margin-left:8px">打开</button>
+      <button id="wsCancelBtn" data-i18n="cancel" style="background:var(--card);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:6px 14px;cursor:pointer">取消</button>
+      <button id="wsOpenBtn" data-i18n="open" style="background:var(--acc);border:none;color:#fff;border-radius:8px;padding:6px 16px;cursor:pointer;margin-left:8px">打开</button>
     </div>
   </div>
 </div>
 
 <div id="llmDialog" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:40;align-items:center;justify-content:center">
   <div style="background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;width:500px;max-width:92vw">
-    <b>大模型设置</b>
-    <p style="color:var(--dim);font-size:12px;margin:6px 0">任何 OpenAI 兼容供应商均可。API Key 只保存在本机 settings.json，不会回显完整内容，也不会发给除供应商以外的任何地方。</p>
+    <b data-i18n="llm.title">大模型设置</b>
+    <p style="color:var(--dim);font-size:12px;margin:6px 0" data-i18n="llm.help">任何 OpenAI 兼容供应商均可。API Key 只保存在本机 settings.json，不会回显完整内容，也不会发给除供应商以外的任何地方。</p>
     <label style="color:var(--dim);font-size:12px;display:block;margin:8px 0 4px">Base URL</label>
     <input id="llmUrl" style="width:100%;background:#10131b;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;outline:none" placeholder="https://api.deepseek.com">
-    <label style="color:var(--dim);font-size:12px;display:block;margin:8px 0 4px">API Key <span id="llmKeyState" style="color:var(--acc)"></span></label>
+    <label style="color:var(--dim);font-size:12px;display:block;margin:8px 0 4px"><span data-i18n="llm.key">API Key</span> <span id="llmKeyState" style="color:var(--acc)"></span></label>
     <input id="llmKey" type="password" autocomplete="off" style="width:100%;background:#10131b;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;outline:none" placeholder="sk-…">
-    <label style="color:var(--dim);font-size:12px;display:block;margin:8px 0 4px">模型</label>
+    <label style="color:var(--dim);font-size:12px;display:block;margin:8px 0 4px" data-i18n="llm.model">模型</label>
     <div style="display:flex;gap:8px">
-      <input id="llmModel" style="flex:1;background:#10131b;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;outline:none" placeholder="deepseek-flash（可点右侧按钮拉取列表）">
-      <button id="llmFetchModels" style="background:var(--card);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:0 12px;font-size:12.5px;cursor:pointer;white-space:nowrap">获取列表</button>
+      <input id="llmModel" style="flex:1;background:#10131b;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;outline:none" data-i18n-placeholder="llm.modelPh" placeholder="deepseek-flash（可点右侧按钮拉取列表）">
+      <button id="llmFetchModels" data-i18n="llm.fetch" style="background:var(--card);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:0 12px;font-size:12.5px;cursor:pointer;white-space:nowrap">获取列表</button>
     </div>
     <div id="llmMsg" style="color:var(--warn);font-size:12px;margin-top:8px;min-height:16px"></div>
     <div style="margin-top:10px;display:flex;justify-content:space-between;align-items:center">
-      <span style="color:var(--dim);font-size:11.5px">留空的项保持不变 · Key 输入框留空 = 不修改</span>
+      <span style="color:var(--dim);font-size:11.5px" data-i18n="llm.keep">留空的项保持不变 · Key 输入框留空 = 不修改</span>
       <span>
-        <button id="llmCancelBtn" style="background:var(--card);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:6px 14px;cursor:pointer">取消</button>
-        <button id="llmSaveBtn" style="background:var(--acc);border:none;color:#fff;border-radius:8px;padding:6px 16px;cursor:pointer;margin-left:8px">保存</button>
+        <button id="llmCancelBtn" data-i18n="cancel" style="background:var(--card);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:6px 14px;cursor:pointer">取消</button>
+        <button id="llmSaveBtn" data-i18n="save" style="background:var(--acc);border:none;color:#fff;border-radius:8px;padding:6px 16px;cursor:pointer;margin-left:8px">保存</button>
       </span>
     </div>
   </div>
@@ -232,43 +236,44 @@
 
 <div id="whatifDialog" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:40;align-items:center;justify-content:center">
   <div style="background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;width:520px;max-width:92vw">
-    <b>what-if 参数扫描</b>
-    <p style="color:var(--dim);font-size:12px;margin:6px 0">对当前项目已验证的电路，把一个元件改成多个值逐点<b>真实仿真</b>，看波形族与指标趋势——纯确定性，非 AI 生成。</p>
+    <b data-i18n="whatif.title">what-if 参数扫描</b>
+    <p style="color:var(--dim);font-size:12px;margin:6px 0" data-i18n="whatif.help">对当前项目已验证的电路，把一个元件改成多个值逐点真实仿真，看波形族与指标趋势——纯确定性，非 AI 生成。</p>
     <div style="display:flex;gap:8px;margin-top:8px">
       <div style="flex:1">
-        <label style="color:var(--dim);font-size:12px;display:block;margin-bottom:4px">扫描元件</label>
+        <label style="color:var(--dim);font-size:12px;display:block;margin-bottom:4px" data-i18n="whatif.comp">扫描元件</label>
         <select id="wfComp" style="width:100%;background:#10131b;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;outline:none"></select>
       </div>
       <div style="flex:1">
-        <label style="color:var(--dim);font-size:12px;display:block;margin-bottom:4px">观测指标</label>
+        <label style="color:var(--dim);font-size:12px;display:block;margin-bottom:4px" data-i18n="whatif.metric">观测指标</label>
         <select id="wfMetric" style="width:100%;background:#10131b;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;outline:none">
-          <option value="vpp">输出峰峰值</option>
-          <option value="mean">输出均值</option>
-          <option value="freq">主频</option>
-          <option value="gain">增益 (out/in)</option>
-          <option value="fc">-3dB 截止频率</option>
+          <option value="vpp" data-i18n="metric.vpp">输出峰峰值</option>
+          <option value="mean" data-i18n="metric.mean">输出均值</option>
+          <option value="freq" data-i18n="metric.freq">主频</option>
+          <option value="gain" data-i18n="metric.gain">增益 (out/in)</option>
+          <option value="fc" data-i18n="metric.fc">-3dB 截止频率</option>
         </select>
       </div>
     </div>
-    <label style="color:var(--dim);font-size:12px;display:block;margin:8px 0 4px">取值（逗号分隔，SPICE 写法，最多 12 个）</label>
-    <input id="wfValues" style="width:100%;background:#10131b;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;outline:none" placeholder="1k, 2.2k, 4.7k, 10k">
+    <label style="color:var(--dim);font-size:12px;display:block;margin:8px 0 4px" data-i18n="whatif.values">取值（逗号分隔，SPICE 写法，最多 12 个）</label>
+    <input id="wfValues" style="width:100%;background:#10131b;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;outline:none" data-i18n-placeholder="whatif.valuesPh" placeholder="1k, 2.2k, 4.7k, 10k">
     <div style="display:flex;gap:8px;margin-top:8px">
-      <div style="flex:1"><label style="color:var(--dim);font-size:12px;display:block;margin-bottom:4px">输出节点（片段）</label>
+      <div style="flex:1"><label style="color:var(--dim);font-size:12px;display:block;margin-bottom:4px" data-i18n="whatif.out">输出节点（片段）</label>
         <input id="wfOut" value="out" style="width:100%;background:#10131b;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;outline:none"></div>
-      <div style="flex:1"><label style="color:var(--dim);font-size:12px;display:block;margin-bottom:4px">输入节点（增益用）</label>
+      <div style="flex:1"><label style="color:var(--dim);font-size:12px;display:block;margin-bottom:4px" data-i18n="whatif.in">输入节点（增益用）</label>
         <input id="wfIn" value="in" style="width:100%;background:#10131b;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;outline:none"></div>
     </div>
     <div id="wfMsg" style="color:var(--warn);font-size:12px;margin-top:8px;min-height:16px"></div>
     <div style="margin-top:10px;text-align:right">
-      <button id="wfCancelBtn" style="background:var(--card);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:6px 14px;cursor:pointer">取消</button>
-      <button id="wfRunBtn" style="background:var(--acc);border:none;color:#fff;border-radius:8px;padding:6px 16px;cursor:pointer;margin-left:8px">运行扫描</button>
+      <button id="wfCancelBtn" data-i18n="cancel" style="background:var(--card);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:6px 14px;cursor:pointer">取消</button>
+      <button id="wfRunBtn" data-i18n="whatif.run" style="background:var(--acc);border:none;color:#fff;border-radius:8px;padding:6px 16px;cursor:pointer;margin-left:8px">运行扫描</button>
     </div>
   </div>
 </div>
 
-<script src="proof.js?v=0.4.0-qa2"></script>
-<script src="board.js?v=0.4.0-qa2"></script>
-<script src="pcb.js?v=1"></script>
+<script src="i18n.js?v=0.4.0-i18n"></script>
+<script src="proof.js?v=0.4.0-i18n"></script>
+<script src="board.js?v=0.4.0-i18n"></script>
+<script src="pcb.js?v=0.4.0-i18n"></script>
 <script>
 (() => {
 "use strict";
@@ -276,16 +281,18 @@
 // 对话面板（统一主页右栏）：与画板共用项目电路——chat 成功轮经
 // canvas_synced 通知画板重载画布；what-if / 报告 / 历史对话框沿用原主页逻辑
 // ---------------------------------------------------------------------------
+const t = (k, v) => VPI18n.t(k, v);
+const tr = s => VPI18n.tr(s);
 let convId = null;      // 当前对话 id；null = 新对话（首条消息发送时落定）
 let attachment = null;  // {filename, content}
 let activeChatRequest = null;
 
 const input = document.getElementById('input'), send_ = document.getElementById('send'), chat = document.getElementById('chat');
-const cancelChatBtn=document.createElement('button'); cancelChatBtn.className='btn'; cancelChatBtn.textContent='取消任务'; cancelChatBtn.hidden=true; send_.after(cancelChatBtn);
+const cancelChatBtn=document.createElement('button'); cancelChatBtn.className='btn'; cancelChatBtn.textContent=t('cancel.task'); cancelChatBtn.hidden=true; send_.after(cancelChatBtn);
 cancelChatBtn.onclick=async()=>{
   if(!activeChatRequest) return;
   cancelChatBtn.disabled=true;
-  try { await fetch('/api/runs/'+activeChatRequest+'/cancel',{method:'POST'}); cancelChatBtn.textContent='正在取消…'; }
+  try { await fetch('/api/runs/'+activeChatRequest+'/cancel',{method:'POST'}); cancelChatBtn.textContent=t('cancel.ing'); }
   catch(e) { cancelChatBtn.disabled=false; }
 };
 const attachBtn = document.getElementById('attach'), file = document.getElementById('file'), chipInfo = document.getElementById('chipInfo');
@@ -302,7 +309,11 @@ const llmBtn = document.getElementById('llmBtn'), llmDialog = document.getElemen
 const initialChatHtml = chat.innerHTML;  // 提示词条，新对话时还原
 
 function fill(text) { input.value = text; input.focus(); }
-window.fill = fill;  // 提示词条的 inline onclick 用
+chat.addEventListener('click', e => {
+  const el = e.target.closest('[data-fill]');
+  if (!el) return;
+  fill(t(el.getAttribute('data-fill')));
+});
 
 // 窄屏页签切换（默认画布由 CSS 给出，tab-chat 类切到对话；PCB 为第三全宽视图）
 const tabDrawBtn = document.getElementById('tabDrawBtn'), tabChatBtn = document.getElementById('tabChatBtn');
@@ -321,21 +332,21 @@ attachBtn.addEventListener('click', () => file.click());
 file.addEventListener('change', async () => {
   const f = file.files[0];
   if (!f) return;
-  if (f.size > 256 * 1024) { alert('文件过大（>256KB）'); file.value = ''; return; }
+  if (f.size > 256 * 1024) { alert(t('attach.big')); file.value = ''; return; }
   attachment = { filename: f.name, content: await f.text() };
   attachBtn.textContent = '📎✓';
-  attachBtn.title = `已附加：${f.name}（点击更换）`;
-  chipInfo.textContent = `附件：${f.name}` + (/\\.(cir|sp|ckt|net|spi|spice)$/i.test(f.name) ? '（将直接仿真验证）' : '（内容并入需求）');
+  attachBtn.title = t('attach.added', {name: f.name});
+  chipInfo.textContent = t('attach.chip', {name: f.name}) + (/\\.(cir|sp|ckt|net|spi|spice)$/i.test(f.name) ? t('attach.sim') : t('attach.text'));
   chipInfo.style.display = 'block';
   file.value = '';
   input.focus();
 });
 
-const STAGE_NAMES = {generate: '生成网表', attach: '载入附件网表', cache: '缓存命中', guard: '前置拦截',
-                     start:'开始任务', requirements:'固定验收目标', intent:'识别操作意图',
-                     'static-check': '静态检查', simulate: '仿真执行', measure: '波形解析',
-                     verify: '指标验收', regenerate: '换架构重生成', 'skidl-build': 'SKiDL 构建',
-                     interpret: 'AI 解读', schematic: '原理图渲染'};
+function stageName(stage) {
+  const key = 'stage.' + stage;
+  const label = t(key);
+  return label === key ? stage : label;
+}
 
 async function send() {
   if(send_.disabled) return;
@@ -347,28 +358,22 @@ async function send() {
   if (!convId) convId = crypto.randomUUID().slice(0, 12);
   const att = attachment;
   input.value = ""; send_.disabled = true;
-  activeChatRequest=crypto.randomUUID(); cancelChatBtn.hidden=false; cancelChatBtn.disabled=false; cancelChatBtn.textContent='取消任务';
+  activeChatRequest=crypto.randomUUID(); cancelChatBtn.hidden=false; cancelChatBtn.disabled=false; cancelChatBtn.textContent=t('cancel.task');
   attachment = null; attachBtn.textContent = '📎'; chipInfo.style.display = 'none';
   addMsg('user', text + (att ? ' 📎' + att.filename : ''));
-  const holder = addMsg('assistant',
-    '<div class="evidence"><div class="verdict" style="color:var(--dim)">仿真验证中…</div>'
-    + '<ol class="tl" style="margin:8px 0 0 18px;color:var(--dim);font-size:12.5px;line-height:1.9"></ol></div>');
-  const tl = holder.querySelector('.tl');
+  const holder = addMsg('assistant', progressHtml());
+  holder._steps = [];
   const addStep = ev => {
     const key=ev.stage+'-'+(ev.round ?? 0);
-    const li = tl.querySelector(`[data-step="${key}"]`) || document.createElement('li');
-    li.dataset.step=key;
-    const bad = ev.problems && ev.problems.length;
-    li.innerHTML = `第 ${(ev.round ?? 0) + 1} 轮 · <b style="color:var(--text)">${STAGE_NAMES[ev.stage] || ev.stage}</b>`
-      + (ev.state === 'running' ? ' · 进行中' : '')
-      + (ev.note ? `（${escapeHtml(ev.note)}）` : '')
-      + (bad ? '：' + escapeHtml(ev.problems.join('；')) : '');
-    tl.appendChild(li); chat.scrollTop = chat.scrollHeight;
+    ev._key = key;
+    const at = holder._steps.findIndex(s => s._key === key);
+    if (at >= 0) holder._steps[at] = ev; else holder._steps.push(ev);
+    paintSteps(holder);
   };
   try {
     const r = await fetch('/chat/stream', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({conversation_id: convId, message: text || '请仿真验证附件电路', attachment: att,
+      body: JSON.stringify({conversation_id: convId, message: text || t('chat.attachment.fallback'), attachment: att,
                              request_id:activeChatRequest, expected_revision:window.VPBoard?.revision()})
     });
     if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
@@ -389,6 +394,8 @@ async function send() {
       }
     }
     if (done) {
+      holder._evidence = done;
+      holder._steps = null;
       holder.innerHTML = renderEvidence(done);
       // 画布同步：chat 成功轮的电路已确定性落布进项目，左栏画布随之刷新
       if (done.ok && done.canvas_synced && window.VPBoard) {
@@ -396,9 +403,9 @@ async function send() {
         VPBoard.reloadRounds();
       }
     }
-    else holder.innerHTML = `<div class="evidence"><div class="verdict fail">出错了</div>${escapeHtml((errEv && errEv.error) || '连接中断')}</div>`;
+    else holder.innerHTML = `<div class="evidence"><div class="verdict fail">${escapeHtml(t('chat.fail'))}</div>${escapeHtml(tr((errEv && errEv.error) || t('chat.dropped')))}</div>`;
   } catch (e) {
-    holder.innerHTML = `<div class="evidence">请求失败：${escapeHtml(e)}</div>`;
+    holder.innerHTML = `<div class="evidence">${escapeHtml(t('chat.requestFail', {msg: e}))}</div>`;
   }
   send_.disabled = false; input.focus();
   activeChatRequest=null; cancelChatBtn.hidden=true;
@@ -413,35 +420,54 @@ function addMsg(role, html) {
   return div;
 }
 
+function progressHtml() {
+  return `<div class="evidence"><div class="verdict" style="color:var(--dim)">${escapeHtml(t('chat.verify'))}</div>`
+    + '<ol class="tl" style="margin:8px 0 0 18px;color:var(--dim);font-size:12.5px;line-height:1.9"></ol></div>';
+}
+function paintSteps(holder) {
+  if (!holder._steps) return;
+  if (!holder.querySelector('.tl')) holder.innerHTML = progressHtml();
+  const tl = holder.querySelector('.tl');
+  tl.innerHTML = '';
+  for (const ev of holder._steps) {
+    const li = document.createElement('li');
+    const bad = ev.problems && ev.problems.length;
+    li.innerHTML = `${escapeHtml(t('chat.round', {n: (ev.round ?? 0) + 1}))} · <b style="color:var(--text)">${escapeHtml(stageName(ev.stage))}</b>`
+      + (ev.state === 'running' ? ' · ' + escapeHtml(t('chat.running')) : '')
+      + (ev.note ? `（${escapeHtml(tr(ev.note))}）` : '')
+      + (bad ? '：' + escapeHtml(ev.problems.map(tr).join('；')) : '');
+    tl.appendChild(li);
+  }
+  chat.scrollTop = chat.scrollHeight;
+}
 function renderEvidence(d) {
   const metrics = Object.entries(d.metrics || {}).map(([k, v]) => `<div class="metric">${escapeHtml(k)} <b>${escapeHtml(v)}</b></div>`).join('');
-  const wave = d.waveform_b64 ? `<img class="wave" src="data:image/png;base64,${d.waveform_b64}" alt="仿真波形">`
-    : d.wave_url ? `<img class="wave" src="${d.wave_url}" alt="仿真波形" loading="lazy">` : '';
-  const sch = d.schematic_b64 ? `<img class="wave" src="data:image/png;base64,${d.schematic_b64}" alt="电路原理图">`
-    : d.sch_url ? `<img class="wave" src="${d.sch_url}" alt="电路原理图" loading="lazy">` : '';
+  const wave = d.waveform_b64 ? `<img class="wave" src="data:image/png;base64,${d.waveform_b64}" alt="${escapeHtml(t('chat.waveAlt'))}">`
+    : d.wave_url ? `<img class="wave" src="${d.wave_url}" alt="${escapeHtml(t('chat.waveAlt'))}" loading="lazy">` : '';
+  const sch = d.schematic_b64 ? `<img class="wave" src="data:image/png;base64,${d.schematic_b64}" alt="${escapeHtml(t('chat.schAlt'))}">`
+    : d.sch_url ? `<img class="wave" src="${d.sch_url}" alt="${escapeHtml(t('chat.schAlt'))}" loading="lazy">` : '';
   const retries = (d.retry_log || []).filter(r => r.stage !== 'generate' && r.stage !== 'attach');
   const retryHtml = retries.length
-    ? `<details><summary>仿真在环日志（${retries.length} 轮）</summary><ol style="margin:8px 0 0 18px;color:var(--dim);font-size:12.5px;line-height:1.9">`
-      + retries.map(r => `<li>第 ${(r.round ?? 0) + 1} 轮 · <b style="color:var(--text)">${STAGE_NAMES[r.stage] || r.stage}</b>${(r.problems && r.problems.length) ? '：' + escapeHtml(r.problems.join('；')) : '，通过'}</li>`).join('')
+    ? `<details><summary>${escapeHtml(t('chat.retryLog', {n: retries.length}))}</summary><ol style="margin:8px 0 0 18px;color:var(--dim);font-size:12.5px;line-height:1.9">`
+      + retries.map(r => `<li>${escapeHtml(t('chat.round', {n: (r.round ?? 0) + 1}))} · <b style="color:var(--text)">${escapeHtml(stageName(r.stage))}</b>${(r.problems && r.problems.length) ? '：' + escapeHtml(r.problems.map(tr).join('；')) : '，' + escapeHtml(t('chat.pass'))}</li>`).join('')
       + '</ol></details>' : '';
-  const checks = d.checks || [];
   const checksHtml = VPProof.checks(d);
   const verdictHtml = d.rejected
-    ? '<div class="verdict fail">🚫 超出能力范围（已前置拒绝，未消耗生成与仿真）</div>'
+    ? `<div class="verdict fail">${escapeHtml(t('chat.rejected'))}</div>`
     : `<div class="verdict ${d.verdict === 'passed' ? 'ok' : ''}">${VPProof.label(d)}</div>`;
   const statsHtml = d.rejected ? '' :
-    `<div><span class="badge">实测指标</span><span class="badge">${d.elapsed}s</span></div>
-     <details><summary>全部测量指标</summary><div class="metrics">${metrics || '<span style="color:var(--dim)">无</span>'}</div></details>`;
+    `<div><span class="badge">${escapeHtml(t('chat.metrics'))}</span><span class="badge">${escapeHtml(String(d.elapsed ?? ''))}s</span></div>
+     <details><summary>${escapeHtml(t('chat.allMetrics'))}</summary><div class="metrics">${metrics || '<span style="color:var(--dim)">' + escapeHtml(t('chat.none')) + '</span>'}</div></details>`;
   const netlistHtml = (d.rejected || !d.netlist) ? '' :
-    `<details><summary>网表（ngspice）</summary><pre>${escapeHtml(d.netlist)}</pre></details>`;
+    `<details><summary>${escapeHtml(t('chat.netlist'))}</summary><pre>${escapeHtml(d.netlist)}</pre></details>`;
   return `<div class="evidence">
     ${verdictHtml}
     ${checksHtml}${VPProof.details(d)}
     ${VPProof.comparison(d.comparison)}
     ${statsHtml}
-    ${sch ? '<div><span class="badge">原理图（自动布局）</span></div>' + sch : ''}
+    ${sch ? '<div><span class="badge">' + escapeHtml(t('chat.schematic')) + '</span></div>' + sch : ''}
     ${wave}
-    <div class="interp">${escapeHtml(d.interpretation || '')}</div>
+    <div class="interp">${escapeHtml(tr(d.interpretation || ''))}</div>
     ${netlistHtml}
     ${retryHtml}
   </div>`;
@@ -463,8 +489,8 @@ async function loadWsInfo() {
   try {
     const d = await (await fetch('/api/ws')).json();
     currentWsRoot = d.root || "";
-    wsInfo.textContent = `📁 ${d.root}${d.is_default ? '（默认）' : ''} · ${d.tasks} 任务`;
-  } catch (e) { wsInfo.textContent = '📁 工作区不可用'; }
+    wsInfo.textContent = '📁 ' + t('ws.tasks', {root: d.root, suffix: d.is_default ? t('ws.default') : '', n: d.tasks});
+  } catch (e) { wsInfo.textContent = t('ws.unavailable'); }
 }
 window.refreshWorkspaceInfo = loadWsInfo;
 
@@ -476,7 +502,7 @@ function rememberWs(p) {
 function renderRecent() {
   const arr = recentWs();
   wsRecent.innerHTML = arr.length
-    ? '<div style="color:var(--dim);font-size:12px;margin-bottom:4px">最近使用</div>' +
+    ? '<div style="color:var(--dim);font-size:12px;margin-bottom:4px">' + escapeHtml(t('ws.recent')) + '</div>' +
       arr.map(p => `<div class="wsRecentItem" style="padding:5px 8px;border:1px solid var(--line);border-radius:6px;margin:4px 0;cursor:pointer;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(p)}</div>`).join('')
     : '';
   wsRecent.querySelectorAll('.wsRecentItem').forEach((el, i) => el.addEventListener('click', () => openWs(arr[i])));
@@ -487,7 +513,7 @@ async function openWs(p) {
   try {
     const r = await fetch('/api/ws/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: p }) });
     const d = await r.json();
-    if (!r.ok) { wsErr.textContent = d.error || '打开失败'; return; }
+    if (!r.ok) { wsErr.textContent = tr(d.error) || t('open.fail'); return; }
     rememberWs(d.root);
     wsDialog.style.display = 'none';
     loadWsInfo(); loadConvs();
@@ -514,7 +540,7 @@ async function loadConvs() {
   histList.innerHTML = '';
   const convs = d.conversations || [];
   if (!convs.length) {
-    histList.innerHTML = '<div style="color:var(--dim);font-size:12px;margin-top:10px">还没有对话——发送第一条消息即创建</div>';
+    histList.innerHTML = '<div style="color:var(--dim);font-size:12px;margin-top:10px">' + escapeHtml(t('hist.empty')) + '</div>';
     return;
   }
   for (const c of convs) {
@@ -524,13 +550,13 @@ async function loadConvs() {
         <b style="font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(c.title)}</b>
         <span style="color:var(--dim);font-size:11px;white-space:nowrap">${escapeHtml(c.updated || '')}</span></div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:2px">
-        <span style="color:var(--dim);font-size:11px">${c.messages} 条消息${c.id === convId ? ' · 当前' : ''}</span>
-        <span class="repBtn" title="导出实验报告（打印即 PDF）" style="color:var(--acc);font-size:11.5px;cursor:pointer;padding:2px 6px">📄 报告</span>
+        <span style="color:var(--dim);font-size:11px">${escapeHtml(t('hist.messages', {n: c.messages}))}${c.id === convId ? escapeHtml(t('hist.current')) : ''}</span>
+        <span class="repBtn" title="${escapeHtml(t('hist.report.tip'))}" style="color:var(--acc);font-size:11.5px;cursor:pointer;padding:2px 6px">${escapeHtml(t('hist.report'))}</span>
       </div>`;
     el.addEventListener('click', () => restoreConv(c.id));
     el.querySelector('.repBtn').addEventListener('click', e => {
       e.stopPropagation();
-      window.open('/api/report/' + encodeURIComponent(c.id), '_blank');
+      window.open('/api/report/' + encodeURIComponent(c.id) + '?lang=' + encodeURIComponent(VPI18n.apiLang()), '_blank');
     });
     histList.appendChild(el);
   }
@@ -540,16 +566,17 @@ async function restoreConv(id) {
   let d;
   try {
     const r = await fetch('/api/convs/' + encodeURIComponent(id));
-    if (!r.ok) { alert('对话不存在（可能已被清理）'); return; }
+    if (!r.ok) { alert(t('hist.missing')); return; }
     d = await r.json();
-  } catch (e) { alert('恢复失败：' + e); return; }
+  } catch (e) { alert(t('hist.restoreFail', {msg: e})); return; }
   convId = d.id;
   chat.innerHTML = '';
   for (const m of d.messages || []) {
     if (m.role === 'user') {
       addMsg('user', (m.text || '') + (m.attachment ? ' 📎' + m.attachment : ''));
     } else {
-      addMsg('assistant', renderEvidence(m.evidence || { interpretation: '（该次结果未能还原）' }));
+      const node = addMsg('assistant', renderEvidence(m.evidence || { interpretation: t('hist.unreadable') }));
+      if (m.evidence) node._evidence = m.evidence;
     }
   }
   histPanel.style.display = 'none';
@@ -559,6 +586,7 @@ async function restoreConv(id) {
 document.getElementById('newConvBtn').addEventListener('click', () => {
   convId = null;
   chat.innerHTML = initialChatHtml;
+  VPI18n.apply(chat);
   histPanel.style.display = 'none';
   input.focus();
 });
@@ -577,9 +605,9 @@ async function loadLlmConfig() {
     const d = await (await fetch('/api/llm/config')).json();
     llmUrl.value = d.base_url || '';
     llmModel.value = d.model || '';
-    llmKeyState.textContent = d.has_key ? `（已配置：${d.key_masked}）` : '（未配置）';
+    llmKeyState.textContent = d.has_key ? t('llm.key.set', {mask: d.key_masked}) : t('llm.key.missing');
     llmKey.value = '';
-    llmKey.placeholder = d.has_key ? '留空表示沿用当前 Key' : 'sk-…';
+    llmKey.placeholder = d.has_key ? t('llm.key.keepPh') : 'sk-…';
   } catch (e) { llmKeyState.textContent = ''; }
 }
 
@@ -594,27 +622,27 @@ document.getElementById('llmCancelBtn').addEventListener('click', () => llmDialo
 
 llmFetchModels.addEventListener('click', async () => {
   llmMsg.style.color = 'var(--dim)';
-  llmMsg.textContent = '正在拉取模型列表…';
+  llmMsg.textContent = t('llm.fetching');
   try {
     const body = {};
     if (llmUrl.value.trim()) body.base_url = llmUrl.value.trim();
     if (llmKey.value.trim()) body.api_key = llmKey.value.trim();
     const r = await fetch('/api/llm/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const d = await r.json();
-    if (!r.ok) throw new Error(d.error || '拉取失败');
+    if (!r.ok) throw new Error(tr(d.error) || t('llm.fetchFail'));
     llmMsg.style.color = 'var(--ok)';
     // 模型名渲染成可点选徽章，点谁选谁（不做 datalist——它会按输入框当前值过滤）
-    llmMsg.innerHTML = `获取到 ${d.models.length} 个模型，点选：` +
+    llmMsg.innerHTML = escapeHtml(t('llm.fetched', {n: d.models.length})) +
       d.models.map(m => `<span class="mchip" onclick="pickModel('${escapeHtml(m)}')">${escapeHtml(m)}</span>`).join('');
   } catch (e) {
     llmMsg.style.color = 'var(--warn)';
-    llmMsg.textContent = String(e.message || e) + '（可手动输入模型名）';
+    llmMsg.textContent = String(e.message || e) + t('llm.manual');
   }
 });
 
 document.getElementById('llmSaveBtn').addEventListener('click', async () => {
   llmMsg.style.color = 'var(--dim)';
-  llmMsg.textContent = '保存中…';
+  llmMsg.textContent = t('llm.saving');
   const body = {};
   if (llmUrl.value.trim()) body.base_url = llmUrl.value.trim();
   if (llmKey.value.trim()) body.api_key = llmKey.value.trim();
@@ -622,9 +650,9 @@ document.getElementById('llmSaveBtn').addEventListener('click', async () => {
   try {
     const r = await fetch('/api/llm/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const d = await r.json();
-    if (!r.ok) throw new Error(d.error || '保存失败');
+    if (!r.ok) throw new Error(tr(d.error) || t('llm.saveFail'));
     llmMsg.style.color = 'var(--ok)';
-    llmMsg.textContent = `已保存：${d.model} @ ${d.base_url}`;
+    llmMsg.textContent = t('llm.saved', {model: d.model, url: d.base_url});
     setTimeout(() => { llmDialog.style.display = 'none'; }, 600);
   } catch (e) {
     llmMsg.style.color = 'var(--warn)';
@@ -640,17 +668,17 @@ const whatifBtn = document.getElementById('whatifBtn'), whatifDialog = document.
 let wfBaseRevision=null;
 
 async function openWhatif() {
-  wfMsg.style.color = 'var(--dim)'; wfMsg.textContent = '读取当前电路元件…';
+  wfMsg.style.color = 'var(--dim)'; wfMsg.textContent = t('whatif.loading');
   try {
     await window.VPBoard?.flushProject();
     const r = await fetch('/api/whatif/components');
     const d = await r.json();
-    if (!r.ok) throw new Error(d.error || '读取失败');
+    if (!r.ok) throw new Error(tr(d.error) || t('whatif.readFail'));
     const cs = d.components || [];
     wfBaseRevision=d.revision;
-    if (!cs.length) throw new Error('当前电路里没有可扫描的元件（R/C/L 与直流源）');
+    if (!cs.length) throw new Error(t('whatif.none'));
     wfComp.innerHTML = cs.map(c =>
-      `<option value="${escapeHtml(c.name)}">${escapeHtml(c.name)}（${escapeHtml(c.kind)}，当前 ${escapeHtml(c.value)}，${escapeHtml(c.nodes)}）</option>`).join('');
+      `<option value="${escapeHtml(c.name)}">${escapeHtml(t('whatif.opt', {name: c.name, kind: c.kind, value: c.value, nodes: c.nodes}))}</option>`).join('');
     wfMsg.textContent = '';
     whatifDialog.style.display = 'flex';
   } catch (e) {
@@ -670,20 +698,21 @@ function renderWhatif(d) {
   const rows = (d.points || []).map(p =>
     `<tr><td style="padding:3px 10px 3px 0;font-family:Consolas,monospace">${escapeHtml(p.value)}</td>` +
     `<td style="padding:3px 10px 3px 0;font-family:Consolas,monospace;color:var(--acc)">${p.ok ? fmtNum(p.metric) : '—'}</td>` +
-    `<td style="padding:3px 0;color:${p.passed === true ? 'var(--ok)' : 'var(--warn)'}">${p.ok ? (p.passed === true ? '✓ 指标达标' : p.passed === false ? '未达目标' : '尚未设置目标') : escapeHtml(p.error || '')}</td>` +
-    `<td>${p.candidate_id ? `<button class="btn" data-apply-version="${escapeHtml(p.candidate_id)}" data-base-revision="${d.base_revision}">采用这个值</button>` : ''}</td></tr>`).join('');
+    `<td style="padding:3px 0;color:${p.passed === true ? 'var(--ok)' : 'var(--warn)'}">${p.ok ? (p.passed === true ? escapeHtml(t('point.pass')) : p.passed === false ? escapeHtml(t('point.fail')) : escapeHtml(t('point.none'))) : escapeHtml(tr(p.error || ''))}</td>` +
+    `<td>${p.candidate_id ? `<button class="btn" data-apply-version="${escapeHtml(p.candidate_id)}" data-base-revision="${d.base_revision}">${escapeHtml(t('whatif.adopt'))}</button>` : ''}</td></tr>`).join('');
+  const metricLabel = t('metric.' + d.metric) === 'metric.' + d.metric ? (d.metric_name || d.metric) : t('metric.' + d.metric);
   return `<div class="evidence">
-    <div class="verdict">🔀 what-if 扫描：${escapeHtml(d.component)} × ${escapeHtml(d.metric_name)}<span style="font-size:12px;color:var(--dim)">（逐值真实仿真，确定性结果）</span></div>
-    ${d.png_b64 ? `<img class="wave" src="data:image/png;base64,${d.png_b64}">` : ''}
-    <div class="hint">${escapeHtml(d.note || '')} · 电路版本 ${escapeHtml((d.version_id || '').slice(0,8))}</div>
-    <table style="border-collapse:collapse;margin-top:8px;font-size:13px"><thead><tr style="color:var(--dim);font-size:12px"><th align="left" style="padding:0 10px 4px 0">${escapeHtml(d.component)}</th><th align="left" style="padding:0 10px 4px 0">${escapeHtml(d.metric_name)}</th><th align="left">状态</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="verdict">${escapeHtml(t('whatif.heading', {comp: d.component, metric: metricLabel}))}<span style="font-size:12px;color:var(--dim)">${escapeHtml(t('whatif.deterministic'))}</span></div>
+    ${d.png_b64 ? `<div class="whatif-chart-title">${escapeHtml(t('api.whatif_title', {comp: d.component, metric: metricLabel}))}</div><img class="wave" src="data:image/png;base64,${d.png_b64}">` : ''}
+    <div class="hint">${escapeHtml(tr(d.note || ''))} · ${escapeHtml(t('whatif.version', {id: (d.version_id || '').slice(0,8)}))}</div>
+    <table style="border-collapse:collapse;margin-top:8px;font-size:13px"><thead><tr style="color:var(--dim);font-size:12px"><th align="left" style="padding:0 10px 4px 0">${escapeHtml(d.component)}</th><th align="left" style="padding:0 10px 4px 0">${escapeHtml(metricLabel)}</th><th align="left">${escapeHtml(t('whatif.status'))}</th></tr></thead><tbody>${rows}</tbody></table>
   </div>`;
 }
 
 document.getElementById('wfRunBtn').addEventListener('click', async () => {
   const values = wfValues.value.split(/[,，\s]+/).filter(Boolean);
-  if (!values.length) { wfMsg.style.color = 'var(--warn)'; wfMsg.textContent = '请填扫描取值，如 1k, 2.2k, 4.7k'; return; }
-  wfMsg.style.color = 'var(--dim)'; wfMsg.textContent = '逐值仿真中…（每个值一次真实 ngspice 运行）';
+  if (!values.length) { wfMsg.style.color = 'var(--warn)'; wfMsg.textContent = t('whatif.needValues'); return; }
+  wfMsg.style.color = 'var(--dim)'; wfMsg.textContent = t('whatif.running');
   document.getElementById('wfRunBtn').disabled = true;
   try {
     const r = await fetch('/api/whatif', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -691,9 +720,10 @@ document.getElementById('wfRunBtn').addEventListener('click', async () => {
                              expected_revision:wfBaseRevision,
                              metric: wfMetric.value, out_frag: wfOut.value.trim() || 'out', in_frag: wfIn.value.trim() || 'in' }) });
     const d = await r.json();
-    if (!r.ok || d.error) throw new Error(d.error || '扫描失败');
+    if (!r.ok || d.error) throw new Error(tr(d.error) || t('whatif.fail'));
     whatifDialog.style.display = 'none';
-    addMsg('assistant', renderWhatif(d));
+    const node = addMsg('assistant', renderWhatif(d));
+    node._whatif = d;
     if (window.VPBoard) window.VPBoard.reloadRounds();
     if (window.refreshWorkspaceInfo) window.refreshWorkspaceInfo();
   } catch (e) {
@@ -703,6 +733,23 @@ document.getElementById('wfRunBtn').addEventListener('click', async () => {
 });
 whatifBtn.addEventListener('click', openWhatif);
 document.getElementById('wfCancelBtn').addEventListener('click', () => whatifDialog.style.display = 'none');
+
+document.addEventListener('vp-lang', () => {
+  cancelChatBtn.textContent = cancelChatBtn.disabled ? t('cancel.ing') : t('cancel.task');
+  if (chipInfo.style.display !== 'none' && attachment === null && chipInfo.textContent) {
+    /* 附件提示已写进 DOM；语言切换时按当前文件名无法还原，保持 tr 能识别的整句 */
+    chipInfo.textContent = tr(chipInfo.textContent);
+    attachBtn.title = tr(attachBtn.title);
+  }
+  document.querySelectorAll('#chat .msg').forEach(node => {
+    if (node._evidence) node.innerHTML = renderEvidence(node._evidence);
+    else if (node._whatif) node.innerHTML = renderWhatif(node._whatif);
+    else if (node._steps) paintSteps(node);
+  });
+  if (!chat.querySelector('.msg')) VPI18n.apply(chat);
+  if (histPanel.style.display !== 'none') loadConvs();
+  loadWsInfo();
+});
 
 })();
 </script>

@@ -61,7 +61,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
-Then open [http://127.0.0.1:8000](http://127.0.0.1:8000) for the workbench (canvas left, chat right). After `pip install .` you can also run the `voltproof` command.
+Then open [http://127.0.0.1:8000](http://127.0.0.1:8000) for the workbench (canvas left, chat right). The workbench, canvas, and comparison pages can be switched between Simplified Chinese and English from the header (中文 / English). Chinese stays the default. After `pip install .` you can also run the `voltproof` command.
 
 | Page | URL |
 | --- | --- |
