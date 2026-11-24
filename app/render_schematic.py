@@ -1,13 +1,11 @@
 """schemdraw 电路图渲染：LLM 生成 schemdraw 代码 → 受限执行 → PNG。  [W4，可裁剪]
 
-安全注意：执行 LLM 生成的 Python 代码有风险。受限措施（三层）：
-  1. AST 白名单校验：只允许 import schemdraw / schemdraw.elements / math，
-     禁用 open/exec/eval/__import__/os/sys/subprocess 等名字
-  2. 独立子进程 + python -I 隔离模式（忽略环境变量/用户 site）+ 20s 超时
-  3. 任何失败（校验不过/执行报错/无产物）返回 None，前端降级显示格式化网表
-
-局限（Phase 0 接受）：AST 校验挡不住刻意构造的逃逸；真实防线是它只跑在
-演示服务器上、无敏感凭据，且输出必须是 schematic.png 才会被采用。
+安全注意：执行模型生成的 Python。这不是操作系统沙箱。
+实际限制：
+  1. AST 白名单：只允许 import schemdraw / schemdraw.elements / math；
+     拒绝 open/exec/eval 等名字，以及一切 dunder 属性访问
+  2. 独立子进程 + python -I + 超时 + 不含 API Key 的最小环境
+  3. 校验或执行失败返回 None，前端改显示网表文本
 """
 
 from __future__ import annotations

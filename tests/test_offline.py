@@ -110,8 +110,207 @@ def check(name: str, cond: bool, detail: str = "") -> None:
         FAILURES.append(name)
 
 
+def _run_safety_filter_tests(tmp: Path) -> None:
+    """过滤器单测：这些输入应在启动 ngspice / 读出文件正文之前被拒绝。"""
+    from unittest.mock import patch
+
+    from app.ngspice_runner import (check_netlist_safety, ngspice_argv, ngspice_env,
+                                     redact_foreign_source, run_netlist)
+    from app.sandbox import ast_check, minimal_env
+
+    def probs(text: str, root: Path | None = None) -> list[str]:
+        return check_netlist_safety(text, root=root)
+
+    def has(text: str, needle: str, root: Path | None = None) -> bool:
+        return any(needle in p for p in probs(text, root))
+
+    shell_nl = ("* evil\nV1 a 0 1\nR1 a 0 1k\n.control\n"
+                "shell echo PWNED > C:/pwned.txt\nop\n.endc\n.end")
+    check("安全: .control shell 命令被拒绝", has(shell_nl, "系统命令"))
+    check("安全: 绝对路径 .include 被拒绝",
+          has("* x\n.include C:/Users/secret.txt\nV1 a 0 1\n.end\n", "路径"))
+    check("安全: POSIX 绝对路径 .include 被拒绝",
+          has("* x\n.include /outside/secret.lib\nV1 a 0 1\n.end\n", "路径"))
+    check("安全: .inc 绝对路径被拒绝",
+          has("* x\n.inc /outside/secret.lib\nV1 a 0 1\n.end\n", "路径"))
+    check("安全: .INC 大小写被拒绝",
+          has("* x\n.INC /outside/secret.lib\nV1 a 0 1\n.end\n", "路径"))
+    check("安全: .lib 绝对路径被拒绝",
+          has("* x\n.lib /outside/secret.lib dmod\nV1 a 0 1\n.end\n", "路径"))
+    check("安全: UNC include 被拒绝",
+          has("* x\n.include //share/secret.lib\nV1 a 0 1\n.end\n", "路径"))
+    check("安全: ~ include 被拒绝",
+          has("* x\n.include ~/secret.lib\nV1 a 0 1\n.end\n", "路径"))
+    check("安全: .. include 离开仿真目录被拒绝",
+          has("* x\n.include ../adder_common.inc\nV1 a 0 1\n.end\n", "路径"))
+    check("安全: 注释里的 include 不误伤",
+          probs("* .include /outside/secret.lib\nV1 a 0 1\n.end\n") == [])
+    check("安全: .ic 不是 include",
+          probs("* x\nV1 a 0 1\n.ic v(a)=1\n.control\nop\nwrite out.raw v(a)\n.endc\n.end\n") == [])
+    check("安全: quit 放行（无副作用）",
+          probs("* x\nV1 a 0 1\n.control\nop\nquit\n.endc\n.end\n") == [])
+    check("安全: .control gnuplot 被拒绝",
+          has("* gp\nV1 a 0 1\n.control\ngnuplot gpout1 v(a)\nop\n.endc\n.end", "外部程序"))
+    check("安全: .control edit 被拒绝",
+          has("* e\nV1 a 0 1\n.control\nedit\n.endc\n.end", "外部程序"))
+    check("安全: .control pyplot 被拒绝",
+          has("* e\nV1 a 0 1\n.control\npyplot out v(a)\n.endc\n.end", "外部程序"))
+    check("安全: .control aspice 被拒绝",
+          has("* evil\nV1 a 0 1\n.control\naspice echo PWNED > C:/pwned.txt\nop\n.endc\n.end",
+              "系统命令"))
+    check("安全: .control ! 前缀 shell 逃逸被拒绝",
+          has("* e\nV1 a 0 1\n.control\n!del C:/x\n.endc\n.end", "系统命令"))
+    check("安全: shell 缩写被拒绝",
+          has("* e\nV1 a 0 1\n.control\nshel echo hi\n.endc\n.end", "系统命令"))
+    check("安全: 分号后的 shell 被拒绝",
+          has("* e\nV1 a 0 1\n.control\nop ; shell echo hi\n.endc\n.end", "系统命令"))
+    check("安全: .control hardcopy 被拒绝",
+          has("* e\nV1 a 0 1\n.control\nhardcopy C:/Users/x.ps v(a)\n.endc\n.end", "系统命令"))
+    check("安全: fourier 不被 fopen 缩写误伤",
+          probs("* e\nV1 a 0 1\n.control\nfourier 1k v(a)\n.endc\n.end") == [])
+    for name, nl in (
+        ("wrdata 绝对路径", "* e\nV1 a 0 1\n.control\nwrdata /outside/a.txt v(a)\n.endc\n.end"),
+        ("wrdata ..", "* e\nV1 a 0 1\n.control\nwrdata ../a.txt v(a)\n.endc\n.end"),
+        ("write 绝对路径", "* e\nV1 a 0 1\n.control\nwrite /outside/a.raw v(a)\n.endc\n.end"),
+        ("write ..", "* e\nV1 a 0 1\n.control\nwrite ../a.raw v(a)\n.endc\n.end"),
+        ("write 变量路径", "* e\nV1 a 0 1\n.control\nwrite $inputdir/a.raw v(a)\n.endc\n.end"),
+        ("fopen", "* e\nV1 a 0 1\n.control\nfopen h local.txt w\n.endc\n.end"),
+        ("fwrite", "* e\nV1 a 0 1\n.control\nfwrite h hello\n.endc\n.end"),
+        ("fread", "* e\nV1 a 0 1\n.control\nfread h line\n.endc\n.end"),
+        ("重定向", "* e\nV1 a 0 1\n.control\necho hello > /outside/a.txt\n.endc\n.end"),
+        ("sourcepath", "* e\nV1 a 0 1\n.control\nset sourcepath = ( /outside )\n.endc\n.end"),
+    ):
+        check(f"安全: {name} 被拒绝", has(nl, "路径"), nl)
+    check("安全: codemodel 被拒绝",
+          has("* e\nV1 a 0 1\n.control\ncodemodel analog.cm\n.endc\n.end", "代码"))
+    check("安全: pre_osdi 被拒绝",
+          has("* e\nV1 a 0 1\n.control\npre_osdi diode.osdi\n.endc\n.end", "代码"))
+    check("安全: osdi 被拒绝",
+          has("* e\nV1 a 0 1\n.control\nosdi diode.osdi\n.endc\n.end", "代码"))
+    check("安全: 控制块外的 pre_osdi 被拒绝",
+          has("pre_osdi /outside/diode.osdi\nV1 a 0 1\n.end\n", "代码"))
+    check("安全: 正常网表零误报", probs(RC_NETLIST) == [])
+
+    root = tmp / "inc-root"
+    (root / "models").mkdir(parents=True)
+    (root / "models" / "ok.lib").write_text(".model d D\n", encoding="utf-8")
+    (root / "models" / "bad.lib").write_text(
+        "* MARKER_SHOULD_NOT_LEAK\n.include /outside/no-such.lib\n", encoding="utf-8")
+    check("安全: 仿真目录内的 .include 放行",
+          probs("* t\n.include models/ok.lib\nV1 a 0 1\nR1 a 0 1k\n.end\n", root) == [])
+    check("安全: 解析后仍在仿真目录的 include 放行",
+          probs("* t\n.include sub/../models/ok.lib\nV1 a 0 1\n.end\n", root) == [])
+    check("安全: 带根目录时 .. include 被拒绝",
+          has("* t\n.include ../outside.lib\nV1 a 0 1\n.end\n", "路径", root))
+    nested = probs("* t\n.include models/bad.lib\nV1 a 0 1\n.end\n", root)
+    check("安全: 嵌套绝对 include 被拒绝", any("路径" in p for p in nested))
+    check("安全: 被拒 include 的正文不进报错",
+          not any("MARKER_SHOULD_NOT_LEAK" in p for p in nested))
+    check("安全: 正常网表在仿真目录内仍放行", probs(RC_NETLIST, root) == [])
+
+    log = ("Error: no model type given in line FOREIGN_MARKER!\n"
+           "Error on line 9 :\n"
+           "  NEXT_FOREIGN_MARKER\n"
+           "unknown parameter\n"
+           "Warning: singular matrix:  check node a\n")
+    red = redact_foreign_source(log, "* t\nV1 a 0 1\n.end\n")
+    check("安全: 行内引用的外部源码被抹掉", "FOREIGN_MARKER" not in red and "已省略" in red)
+    check("安全: 下一行外部源码被抹掉", "NEXT_FOREIGN_MARKER" not in red)
+    check("安全: 诊断行仍保留", "unknown parameter" in red and "singular matrix" in red)
+    kept = redact_foreign_source("Error: bad in line V1 a 0 1!\n", "* t\nV1 a 0 1\n.end\n")
+    check("安全: 网表自身的源码行仍保留", "V1 a 0 1" in kept)
+
+    saved = {k: os.environ.get(k) for k in ("VOLTPROOF_API_KEY", "HOME", "LD_PRELOAD")}
+    os.environ["VOLTPROOF_API_KEY"] = "sk-test-dummy"
+    os.environ["HOME"] = str(tmp / "home")
+    os.environ["LD_PRELOAD"] = str(tmp / "none.so")
+    try:
+        env = ngspice_env()
+        penv = minimal_env()
+        check("安全: ngspice 环境不含密钥和用户目录",
+              "VOLTPROOF_API_KEY" not in env and "HOME" not in env
+              and "LD_PRELOAD" not in env and env.get("LC_ALL") == "C")
+        check("安全: 沙箱环境不含任何凭据",
+              "VOLTPROOF_API_KEY" not in penv
+              and not any(("KEY" in k or "SECRET" in k or "TOKEN" in k) for k in penv))
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+    argv = ngspice_argv(Path("circuit.cir"), Path("ngspice.log"))
+    check("安全: ngspice 使用 -n/--no-spiceinit", "-n" in argv and "-b" in argv)
+
+    started = {"v": False}
+
+    def _boom(*_a, **_k):
+        started["v"] = True
+        raise RuntimeError("simulator started")
+
+    blocked = (
+        "* x\n.include /outside/no-such.lib\nV1 a 0 1\n.end\n",
+        "* e\nV1 a 0 1\n.control\nwrdata /outside/a.txt v(a)\n.endc\n.end\n",
+        "* e\nV1 a 0 1\n.control\nwrite /outside/a.raw v(a)\n.endc\n.end\n",
+        "* e\nV1 a 0 1\n.control\ncodemodel /outside/analog.cm\n.endc\n.end\n",
+        "* e\nV1 a 0 1\n.control\npre_osdi /outside/diode.osdi\n.endc\n.end\n",
+    )
+    try:
+        with patch("app.ngspice_runner.subprocess.Popen", side_effect=_boom):
+            for nl in blocked:
+                started["v"] = False
+                try:
+                    sim = run_netlist(nl, workdir=tmp / "no-start")
+                except RuntimeError:
+                    sim = None
+                check("安全: 拒绝发生在启动仿真器之前",
+                      sim is not None and not sim.ok and not started["v"]
+                      and ("路径" in sim.stderr or "代码" in sim.stderr),
+                      "" if sim is None else sim.stderr[:120])
+    except Exception as exc:
+        check("安全: 拒绝发生在启动仿真器之前", False, str(exc))
+
+    escape = ('cw = [c for c in (1).__class__.__base__.__subclasses__() '
+              'if c.__name__ == "catch_warnings"][0]')
+    modules = {"schemdraw", "schemdraw.elements", "math"}
+    check("安全: dunder 逃逸链被 AST 拦截",
+          ast_check("import schemdraw\n" + escape, {"schemdraw"}) is False)
+    check("安全: __getattribute__ 被 AST 拦截",
+          ast_check("import schemdraw\nx = (1).__getattribute__('__class__')\n",
+                    {"schemdraw"}) is False)
+    check("安全: __builtins__ 名字被 AST 拦截",
+          ast_check("import schemdraw\n__builtins__\n", {"schemdraw"}) is False)
+    check("安全: __dict__ 被 AST 拦截",
+          ast_check("import schemdraw\nx = (1).__dict__\n", {"schemdraw"}) is False)
+    check("安全: f_globals 被 AST 拦截",
+          ast_check("import schemdraw\nx.f_globals\n", {"schemdraw"}) is False)
+    check("安全: 正常 schemdraw 代码放行",
+          ast_check("import schemdraw\nimport schemdraw.elements as elm\n"
+                    "d = schemdraw.Drawing(show=False)\n"
+                    "d += elm.Resistor().label('R1')\n"
+                    "d += elm.Capacitor().down()\n"
+                    "d.save('schematic.png', dpi=150, transparent=False)\n",
+                    modules) is True)
+    check("安全: 正常 skidl 代码放行",
+          ast_check("from skidl import generate_netlist\n"
+                    "from skidl.pyspice import R, C, V, gnd, Net\n"
+                    "inp, out = Net('IN'), Net('OUT')\n"
+                    "r1 = R(value='1k')\n"
+                    "inp += r1[1]\n"
+                    "gnd += r1[2]\n"
+                    "generate_netlist()\n"
+                    "print('ANALYSIS: tran 10u 1m')\n"
+                    "print('OUT_NODES: v(OUT)')\n",
+                    {"skidl", "skidl.pyspice", "math"}) is True)
+
+
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="cp_test_"))
+    # 过滤器不依赖仿真器；环境预检失败时也要留下这些结果。
+    try:
+        _run_safety_filter_tests(tmp)
+    except Exception as exc:
+        check("安全: 过滤测试自身可运行", False, str(exc))
     # 环境预检：ngspice 不可用时干净退出并给修复指引。不预检的话，
     # 中途 raw_path=None 会让后续断言连环 TypeError，失败现场不可读
     probe = run_netlist(
@@ -122,7 +321,9 @@ def main() -> int:
         print("[环境不可用] 无法运行 ngspice："
               f"{(probe.stderr or probe.error_snippet)[:200]}\n"
               "请安装 ngspice 后设 VOLTPROOF_NGSPICE 指向 ngspice.exe，或将其加入 PATH。")
-        return 2
+        if FAILURES:
+            print("失败: " + ", ".join(FAILURES))
+        return 1 if FAILURES else 2
     try:
         # ---- 1. 好网表：仿真 ok + raw 落盘 ----
         sim = run_netlist(RC_NETLIST, workdir=tmp / "good")
@@ -495,51 +696,14 @@ print("OUT_NODES: v(OUT)")
             r1_line = [ln for ln in tuned3.splitlines() if ln.startswith("R1")][0]
             check("tuner: 基波电阻不动", "10k" in r1_line, r1_line)
 
-        # ---- 9. 安全过滤（两个实测 PoC 的回归）----
-        from app.ngspice_runner import check_netlist_safety
-        from app.sandbox import ast_check, minimal_env
-
-        shell_nl = ("* evil\nV1 a 0 1\nR1 a 0 1k\n.control\n"
-                    "shell echo PWNED > C:/pwned.txt\nop\n.endc\n.end")
-        check("安全: .control shell 命令被拒绝", any("系统命令" in p for p in check_netlist_safety(shell_nl)))
-        inc_nl = "* x\n.include C:/Users/secret.txt\nV1 a 0 1\n.end\n"
-        check("安全: 绝对路径 .include 被拒绝", any("路径" in p for p in check_netlist_safety(inc_nl)))
-        check("安全: ../ 相对 .include 放行（ngspice 惯用法）",
-              not check_netlist_safety("* x\n.include ../adder_common.inc\nV1 a 0 1\n.end\n"))
-        check("安全: quit 放行（无副作用）",
-              not check_netlist_safety("* x\nV1 a 0 1\n.control\nop\nquit\n.endc\n.end\n"))
-        # 外部程序调用：gnuplot/edit 会在服务器桌面弹 GUI（官方示例 combplot.cir 实测）
-        gp_nl = ("* gp\nV1 a 0 1\n.control\ngnuplot gpout1 v(a)\nop\n.endc\n.end")
-        check("安全: .control gnuplot 被拒绝",
-              any("外部程序" in p for p in check_netlist_safety(gp_nl)))
-        check("安全: .control edit 被拒绝",
-              any("外部程序" in p
-                  for p in check_netlist_safety("* e\nV1 a 0 1\n.control\nedit\n.endc\n.end")))
-        # shell 逃逸（实测 PoC）：aspice 起子 shell 执行任意命令（曾真实写出
-        # 文件）；"!" 前缀是交互 shell 逃逸（batch 恰不执行，但不能赌版本行为）
-        aspice_nl = ("* evil\nV1 a 0 1\nR1 a 0 1k\n.control\n"
-                     "aspice echo PWNED > C:/pwned.txt\nop\n.endc\n.end")
-        check("安全: .control aspice 被拒绝",
-              any("系统命令" in p for p in check_netlist_safety(aspice_nl)))
-        check("安全: .control ! 前缀 shell 逃逸被拒绝",
-              any("系统命令" in p
-                  for p in check_netlist_safety("* e\nV1 a 0 1\n.control\n!del C:/x\n.endc\n.end")))
-        # hardcopy 可向任意路径写 postscript 文件——文件写原语，一并拒绝
-        check("安全: .control hardcopy 被拒绝",
-              any("系统命令" in p for p in check_netlist_safety(
-                  "* e\nV1 a 0 1\n.control\nhardcopy C:/Users/x.ps v(a)\n.endc\n.end")))
-        check("安全: 正常网表零误报", check_netlist_safety(RC_NETLIST) == [])
-
-        ESCAPE = ('cw = [c for c in (1).__class__.__base__.__subclasses__() '
-                  'if c.__name__ == "catch_warnings"][0]')
-        check("安全: dunder 逃逸链被 AST 拦截",
-              ast_check("import schemdraw\n" + ESCAPE, {"schemdraw"}) is False)
-        check("安全: 正常 schemdraw 代码放行",
-              ast_check("import schemdraw\nimport schemdraw.elements as elm\nd = schemdraw.Drawing()",
-                        {"schemdraw", "schemdraw.elements", "math"}) is True)
-        env = minimal_env()
-        check("安全: 沙箱环境不含任何凭据",
-              not any(("KEY" in k or "SECRET" in k or "TOKEN" in k) for k in env))
+        # 过滤用例在 main 开头已经跑过。这里只确认 -n 确实没加载仿真目录里的 spiceinit。
+        spice_dir = tmp / "spiceinit"
+        spice_dir.mkdir()
+        (spice_dir / ".spiceinit").write_text("echo SPICEINIT_LOADED\n", encoding="utf-8")
+        sim_sp = run_netlist(RC_NETLIST, workdir=spice_dir)
+        check("安全: -n 不加载 .spiceinit",
+              sim_sp.ok and "SPICEINIT_LOADED" not in (sim_sp.stdout + sim_sp.stderr + sim_sp.log),
+              (sim_sp.stderr or sim_sp.log)[:160])
 
         # ---- 10. Traces.analysis 字段（AC 数据被当 tran 判分曾致 sensor 假失败）----
         sim_ac2 = run_netlist(AC_NETLIST, workdir=tmp / "an_ac")
@@ -658,7 +822,7 @@ print("OUT_NODES: v(OUT)")
         check("兼容: 标准 NPN/NMOS 不被误伤",
               not any("CIDER" in e for e in cc2.errors + cc3.errors))
 
-        # 超时报错透出：大步数非线性瞬态 + 缩短超时（确定性慢，不依赖具体电路挂死）
+        # 超时报错透出：步长收到 1us，保证 2s 上限内杀得掉（10us/10s 在 ngspice-42 上能跑完）
         from app import ngspice_runner
 
         _old_to = ngspice_runner._TIMEOUT
@@ -668,7 +832,7 @@ print("OUT_NODES: v(OUT)")
             sim_to = run_netlist(
                 "* long nonlinear tran\nV1 in 0 SIN(0 5 1k)\nD1 in mid d1\n"
                 "R1 mid out 1k\nC1 out 0 10n\n.model d1 D\n"
-                ".control\nset filetype=ascii\ntran 10u 10\nwrite out.raw v(out)\n.endc\n.end\n",
+                ".control\nset filetype=ascii\ntran 1u 30\nwrite out.raw v(out)\n.endc\n.end\n",
                 workdir=tmp / "hang")
             check("兼容: 超时网表按上限被杀且报错点明原因",
                   not sim_to.ok and "超时" in sim_to.error_snippet

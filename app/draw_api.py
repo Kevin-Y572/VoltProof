@@ -65,7 +65,7 @@ def verify_drawn(netlist: str, title: str, workspace, *, requirements=None, expe
         return result
 
     # 1. 安全门（画板网表是客户端任意输入，与附件网表同级信任）
-    problems = check_netlist_safety(netlist)
+    problems = check_netlist_safety(netlist, root=sim_dir)
     if problems:
         return _fail("safety", problems, i18n.t("api.safety_fail"), i18n.t("api.safety_hint"))
 

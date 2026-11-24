@@ -98,6 +98,8 @@ PCB 导出是实验性的可选功能，需要 KiCad 10.x 和 Freerouting。没�
 
 VoltProof 按本地单用户工具来设计，请绑定 `127.0.0.1`。不要在未加鉴权和隔离的情况下把它暴露到公网。
 
+网表和模型生成的 Python 会先做检查：拒绝危险的 `.control` 命令、解析后离开仿真目录的 include 路径，以及 Python 的 dunder 属性访问。ngspice 以 `-n`（`--no-spiceinit`）启动，环境里不带 API 密钥。这些检查不是操作系统级沙箱。
+
 ## 许可证
 
 [Apache-2.0](LICENSE)

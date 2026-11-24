@@ -5,9 +5,9 @@
 SKiDL 是 MIT 的 Python"电路即代码"库：连接显式、数值就是数值，无格式陷阱。
 实测 skidl 2.3.0 的 skidl.pyspice 原语**不加载 PySpice**（GPL 红线无忧）。
 
-安全（同 render_schematic 的三层受限措施）：
-  1. AST 白名单：只允许 import skidl / skidl.pyspice / math
-  2. 独立子进程 + python -I + 超时
+安全（与 render_schematic 相同，不是操作系统沙箱）：
+  1. AST 白名单：只允许 import skidl / skidl.pyspice / math，并拒绝 dunder 属性
+  2. 独立子进程 + python -I + 超时 + 不含 API Key 的最小环境
   3. 失败返回 None + 报错文本（回喂修复环）
 
 代码末尾 print 协议（由提示词约定，builder 据此拼接固定格式的 .control）：
