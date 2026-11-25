@@ -23,6 +23,7 @@ from pathlib import Path
 
 from ..circuit_ir import netlist_to_ir
 from . import connectivity, kicad_backend, parts, router_backend, schema, versions
+from .procutil import no_window_kwargs
 
 _STAGE_NAMES = ("mapping", "board", "routing", "import", "check", "fabrication")
 
@@ -136,15 +137,25 @@ def run_pcb_job(netlist: str, ports: list[str], archive: Path, *,
         _finish(archive, result, netlist, mapped, rules, None, None, t0, ws, None, None)
         return result
 
-    # 2. 工具在场性（缺失时给明确诊断，方案 §5.2 最后一问）
+    # 2. 工具在场性（缺失时给明确诊断，方案 §5.2 最后一问）。
+    # Java 也在这里失败：拖到布线子进程才报，用户只能看到一条启动错误。
     kicad = kicad_backend.find_kicad()
     jar = router_backend.find_freerouting()
-    if kicad is None or jar is None:
+    java = router_backend.find_java()
+    java_err = router_backend.java_blocker(java)
+    if kicad is None or jar is None or java_err:
         missing = []
         if kicad is None:
-            missing.append("KiCad 未找到（设 VOLTPROOF_KICAD 或安装 KiCad 10.x）")
+            missing.append(
+                "KiCad 未找到（安装 KiCad 10.x，或设 VOLTPROOF_KICAD 为安装根目录。"
+                "Linux：bin/kicad-cli，且该前缀或系统 python3 能加载 pcbnew；"
+                "Windows：bin/kicad-cli.exe 与 bin/python.exe）")
         if jar is None:
-            missing.append("Freerouting JAR 未找到（设 VOLTPROOF_FREEROUTING）")
+            missing.append(
+                "Freerouting JAR 未找到（设 VOLTPROOF_FREEROUTING 为 freerouting-*.jar，"
+                "或放到 /opt/freerouting/。须用 JVM JAR，不要用 v2.5.0 原生 CLI）")
+        if java_err:
+            missing.append(java_err)
         result["blockers"] = missing
         result["state"] = schema.FAILED
         result["stages"].append({"stage": "tools", "ok": False,
@@ -180,7 +191,7 @@ def run_pcb_job(netlist: str, ports: list[str], archive: Path, *,
                 (archive / "final" / "_strip.py").write_text(strip, encoding="utf-8")
                 pr = subprocess.run([str(kicad.python), str(archive / "final" / "_strip.py")],
                                     capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
-                                    creationflags=subprocess.CREATE_NO_WINDOW)
+                                    env=kicad.subprocess_env(), **no_window_kwargs())
                 assert "STRIP: True" in pr.stdout, pr.stdout[-300:] + pr.stderr[-200:]
                 ok, out = kicad_backend.move_footprints(kicad, pcb, moves, archive / "final")
                 assert ok, out[:300]

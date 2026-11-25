@@ -5,8 +5,8 @@
 
 运行前置（缺工具时退出码 2 并给修复指引，与 test_offline 的 ngspice
 预检同风格）：
-  - KiCad：装 KiCad 10.x，或设 VOLTPROOF_KICAD=<KiCad 根目录>
-    （便携树亦可：7z 解包安装器即可，无需安装）
+  - KiCad 10.x：Linux 认发行版前缀（/usr/bin/kicad-cli + pcbnew）或
+    VOLTPROOF_KICAD=<根目录>；Windows 便携树为 bin/kicad-cli.exe 与 bin/python.exe
   - Freerouting：设 VOLTPROOF_FREEROUTING=<freerouting-*.jar 路径>
   - Java 21+（跑 JAR）
 
@@ -81,9 +81,14 @@ def main() -> int:
     missing = []
     if kicad is None:
         missing.append("KiCad 未找到：安装 KiCad 10.x，或设 VOLTPROOF_KICAD=<根目录>"
-                       "（bin/ 下须有 kicad-cli.exe 与 python.exe；便携解包树即可）")
+                       "（Linux：bin/kicad-cli 且 python3 能 import pcbnew；"
+                       "Windows：bin/kicad-cli.exe 与 bin/python.exe）")
     if fr is None:
-        missing.append("Freerouting 未找到：设 VOLTPROOF_FREEROUTING=<freerouting-*.jar>")
+        missing.append("Freerouting 未找到：设 VOLTPROOF_FREEROUTING=<freerouting-*.jar>"
+                       "（JVM JAR；Java 21 用 2.1.0，不要用 v2.5.0 原生 CLI）")
+    java_err = router_backend.java_blocker(router_backend.find_java())
+    if java_err:
+        missing.append(java_err)
     if missing:
         for m in missing:
             print(f"[SKIP] {m}")

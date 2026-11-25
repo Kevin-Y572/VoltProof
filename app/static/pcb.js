@@ -87,7 +87,7 @@
       if (pre.port_candidates.length)
         html += '<div class="hint" style="margin-top:6px">' + esc(tt('pcb.portsHint')) + '</div>';
       out.innerHTML = html;
-      $('pcbRunBtn').disabled = !!pre.blockers.length;
+      $('pcbRunBtn').disabled = pre.blockers.length > 0 || pre.tools_ready !== true;
     } catch (e) {
       out.innerHTML = '<span style="color:var(--warn)">' + e.message + '</span>';
     }

@@ -1,6 +1,7 @@
 """ngspice 子进程执行器。一律命令行调用（进程隔离，无 GPL 传染）。
 
-Windows 下若 ngspice 不在 PATH，设环境变量 VOLTPROOF_NGSPICE 指向 ngspice.exe。
+若 ngspice 不在 PATH，设 VOLTPROOF_NGSPICE 指向可执行文件
+（Linux 多为 /usr/bin/ngspice，Windows 多为 ngspice.exe）。
 
 经验（ngspice-47 Windows 实测）：batch 模式下仿真失败往往退出码仍是 0、stdout 为空，
 报错只写进 -o 指定的日志文件，而且失败电路也可能产出全零的 raw 文件。
@@ -32,9 +33,11 @@ def _resolve_ngspice() -> str:
     on_path = shutil.which("ngspice")
     if on_path:
         return on_path
-    bundled = Path(__file__).resolve().parent.parent / "ngspice" / "bin" / "ngspice.exe"
-    if bundled.is_file():
-        return str(bundled)
+    bundled_dir = Path(__file__).resolve().parent.parent / "ngspice" / "bin"
+    for name in ("ngspice.exe", "ngspice"):
+        bundled = bundled_dir / name
+        if bundled.is_file():
+            return str(bundled)
     return "ngspice"
 
 

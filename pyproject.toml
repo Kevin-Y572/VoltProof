@@ -16,6 +16,7 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
 ]
@@ -41,5 +42,5 @@ voltproof-mcp = "app.mcp_server:main"
 packages = ["app", "app.pcb"]
 
 [tool.setuptools.package-data]
-app = ["static/*.html", "static/*.js", "static/*.css", "static/*.ico"]
+app = ["static/*.html", "static/*.js", "static/*.css", "static/*.ico", "static/*.json"]
 "app.pcb" = ["part_catalog/*.json", "tests_data/*.json"]

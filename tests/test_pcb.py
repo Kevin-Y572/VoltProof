@@ -21,6 +21,7 @@ os.environ.setdefault("VOLTPROOF_SETTINGS", str(
 
 from app.pcb import api as api_mod  # noqa: E402
 from app.pcb import connectivity, jobs, kicad_backend, parts, placement, router_backend, schema, versions  # noqa: E402
+from app.pcb.procutil import no_window_kwargs  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
 from app.circuit_ir import netlist_to_ir  # noqa: E402
 from app.workspace import Workspace  # noqa: E402
@@ -129,11 +130,207 @@ def test_finders_missing() -> None:
         router_backend._find_freerouting_cached.cache_clear()
 
 
+def _restore_env(saved: dict[str, str | None]) -> None:
+    for key, value in saved.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+    kicad_backend._find_kicad_cached.cache_clear()
+    router_backend._find_freerouting_cached.cache_clear()
+    router_backend._find_java_cached.cache_clear()
+
+
+def _write_exec(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def test_linux_discovery_and_launch() -> None:
+    """不依赖真实 KiCad/Java/Freerouting：Linux 安装树、环境变量覆盖、启动标志。"""
+    print("Linux 工具发现与跨平台启动标志（无需真实 KiCad/Java/Freerouting）")
+    keys = ("VOLTPROOF_KICAD", "VOLTPROOF_FREEROUTING", "VOLTPROOF_JAVA",
+            "XDG_DATA_HOME", "PATH", "KICAD10_FOOTPRINT_DIR", "KICAD9_FOOTPRINT_DIR",
+            "KICAD8_FOOTPRINT_DIR", "KICAD_FOOTPRINT_DIR")
+    saved = {key: os.environ.get(key) for key in keys}
+    try:
+        kw = no_window_kwargs()
+        if sys.platform == "win32":
+            check("Windows 保留隐藏控制台标志",
+                  kw.get("creationflags") == subprocess.CREATE_NO_WINDOW)
+        else:
+            check("非 Windows 不传 creationflags", "creationflags" not in kw)
+        launched = subprocess.run(
+            [sys.executable, "-c", "print('vp-ok')"],
+            capture_output=True, text=True, timeout=30, **kw)
+        check("启动标志不会让子进程崩溃",
+              launched.returncode == 0 and "vp-ok" in (launched.stdout or ""),
+              (launched.stderr or "")[:200])
+
+        with tempfile.TemporaryDirectory(prefix="vp_kicad_disc_") as td:
+            root = Path(td)
+            win = root / "win"
+            (win / "bin").mkdir(parents=True)
+            (win / "bin" / "kicad-cli.exe").write_text("", encoding="utf-8")
+            (win / "bin" / "python.exe").write_text("", encoding="utf-8")
+            (win / "share" / "kicad" / "footprints").mkdir(parents=True)
+            os.environ["VOLTPROOF_KICAD"] = str(win)
+            kicad_backend._find_kicad_cached.cache_clear()
+            found = kicad_backend.find_kicad()
+            check("Windows 布局：kicad-cli.exe + python.exe",
+                  found is not None and found.cli.name == "kicad-cli.exe"
+                  and found.python.name == "python.exe",
+                  str(found.cli) if found else "None")
+
+            linux = root / "prefix"
+            _write_exec(linux / "bin" / "kicad-cli", "#!/bin/sh\necho 10.0.8\n")
+            _write_exec(linux / "bin" / "python3", "#!/bin/sh\nexit 0\n")
+            (linux / "share" / "kicad" / "footprints").mkdir(parents=True)
+            os.environ["VOLTPROOF_KICAD"] = str(linux)
+            kicad_backend._find_kicad_cached.cache_clear()
+            found = kicad_backend.find_kicad()
+            check("Linux 前缀：bin/kicad-cli 与 bin/python3",
+                  found is not None and found.cli == (linux / "bin" / "kicad-cli").resolve()
+                  and found.python == (linux / "bin" / "python3").resolve()
+                  and found.footprints == (linux / "share" / "kicad" / "footprints").resolve(),
+                  "" if found is None else f"cli={found.cli} py={found.python}")
+            ver = found.version() if found else ""
+            check("kicad-cli version 在当前平台可启动", "10.0.8" in ver, ver)
+
+            distro = root / "distro"
+            _write_exec(distro / "bin" / "kicad-cli", "#!/bin/sh\necho distro\n")
+            pcbnew = distro / "lib" / "python3" / "dist-packages"
+            pcbnew.mkdir(parents=True)
+            (pcbnew / "pcbnew.py").write_text("# fake pcbnew\n", encoding="utf-8")
+            os.environ["VOLTPROOF_KICAD"] = str(distro)
+            kicad_backend._find_kicad_cached.cache_clear()
+            found = kicad_backend.find_kicad()
+            system_py = Path("/usr/bin/python3")
+            if system_py.is_file():
+                check("发行版布局：pcbnew.py 配对 /usr/bin/python3",
+                      found is not None and found.python.resolve() == system_py.resolve()
+                      and "dist-packages" in found.pythonpath,
+                      "" if found is None else f"py={found.python} path={found.pythonpath}")
+            else:
+                check("没有 /usr/bin/python3 时不把残缺发行版树当成 KiCad", found is None)
+
+            os.environ["VOLTPROOF_KICAD"] = str(root / "missing-root")
+            os.environ["PATH"] = str(linux / "bin") + os.pathsep + (saved.get("PATH") or "")
+            kicad_backend._find_kicad_cached.cache_clear()
+            check("无效的 VOLTPROOF_KICAD 不回退到 PATH",
+                  kicad_backend.find_kicad() is None)
+
+            os.environ.pop("VOLTPROOF_KICAD", None)
+            kicad_backend._find_kicad_cached.cache_clear()
+            found = kicad_backend.find_kicad()
+            check("PATH 上的 kicad-cli 能定位 Linux 前缀",
+                  found is not None and found.root == linux.resolve(),
+                  "" if found is None else str(found.root))
+
+            os.environ["VOLTPROOF_KICAD"] = str(win)
+            kicad_backend._find_kicad_cached.cache_clear()
+            found = kicad_backend.find_kicad()
+            check("VOLTPROOF_KICAD 优先于 PATH",
+                  found is not None and found.cli.name == "kicad-cli.exe")
+
+            os.environ["VOLTPROOF_KICAD"] = str(linux / "bin" / "kicad-cli")
+            kicad_backend._find_kicad_cached.cache_clear()
+            found = kicad_backend.find_kicad()
+            check("VOLTPROOF_KICAD 也可以直接指向 kicad-cli",
+                  found is not None and found.root == linux.resolve())
+
+            bare = kicad_backend._kicad_from_root(Path("/usr"))
+            if (Path("/usr/bin/kicad-cli")).is_file():
+                check("已安装的 /usr/bin/kicad-cli 可识别", bare is not None)
+            else:
+                check("只有系统 python3、没有 kicad-cli 时 /usr 不是 KiCad", bare is None)
+
+            jar = root / "freerouting-2.1.0.jar"
+            jar.write_bytes(b"not-a-real-jar")
+            os.environ["VOLTPROOF_FREEROUTING"] = str(jar)
+            router_backend._find_freerouting_cached.cache_clear()
+            check("VOLTPROOF_FREEROUTING 覆盖生效",
+                  router_backend.find_freerouting() == jar.resolve())
+            xdg = root / "xdg"
+            (xdg / "voltproof").mkdir(parents=True)
+            xdg_jar = xdg / "voltproof" / "freerouting-9.9.9.jar"
+            xdg_jar.write_bytes(b"jar")
+            os.environ["XDG_DATA_HOME"] = str(xdg)
+            os.environ["VOLTPROOF_FREEROUTING"] = str(root / "no-such.jar")
+            router_backend._find_freerouting_cached.cache_clear()
+            check("无效的 VOLTPROOF_FREEROUTING 不回退到其它 JAR",
+                  router_backend.find_freerouting() is None)
+            os.environ.pop("VOLTPROOF_FREEROUTING", None)
+            router_backend._find_freerouting_cached.cache_clear()
+            check("XDG 数据目录里的 freerouting-*.jar 可被发现",
+                  router_backend.find_freerouting() == xdg_jar.resolve())
+
+            java21 = root / "java21"
+            _write_exec(java21, "#!/bin/sh\necho 'openjdk version \"21.0.4\"' >&2\n")
+            java17 = root / "java17"
+            _write_exec(java17, "#!/bin/sh\necho 'openjdk version \"17.0.13\"' >&2\n")
+            os.environ["VOLTPROOF_JAVA"] = str(java21)
+            router_backend._find_java_cached.cache_clear()
+            got = router_backend.find_java()
+            check("VOLTPROOF_JAVA 覆盖生效", got == java21.resolve())
+            check("Java 21 不构成阻断",
+                  router_backend.java_blocker(got) is None)
+            os.environ["VOLTPROOF_JAVA"] = str(java17)
+            router_backend._find_java_cached.cache_clear()
+            got = router_backend.find_java()
+            blocked = router_backend.java_blocker(got)
+            check("Java 17 被拒绝并写明需要 21",
+                  got == java17.resolve() and blocked is not None
+                  and "Java" in blocked and "21" in blocked,
+                  blocked or "")
+            os.environ["VOLTPROOF_JAVA"] = str(root / "missing-java")
+            router_backend._find_java_cached.cache_clear()
+            check("无效的 VOLTPROOF_JAVA 不回退到系统 java",
+                  router_backend.find_java() is None)
+
+            fake_java = root / "fake-java"
+            _write_exec(fake_java,
+                        "#!/bin/sh\n"
+                        "echo \"Job 'x' finished with state: COMPLETED\"\n"
+                        "echo 'final score: 1000.00 (0 unrouted and 0 violations)'\n")
+            os.environ["VOLTPROOF_JAVA"] = str(fake_java)
+            work = root / "route"
+            work.mkdir()
+            try:
+                routed = router_backend.route(
+                    jar, root / "b.dsn", work / "b.ses", work, timeout_s=30)
+                check("Freerouting 启动参数在当前平台不崩",
+                      routed.ses_written is False and "SES" in " ".join(routed.problems),
+                      routed.summary + " " + "; ".join(routed.problems))
+            except router_backend.ToolError as exc:
+                check("Freerouting 启动参数在当前平台不崩", False, str(exc))
+
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        rc = "\n".join(["RC deck", "Vin in 0 SIN(0 1 1k)", "R1 in out 1.59k",
+                        "C1 out 0 100n", ".end"])
+        with tempfile.TemporaryDirectory(prefix="vp_java_job_") as td:
+            with patch.object(kicad_backend, "find_kicad", return_value=object()), \
+                 patch.object(router_backend, "find_freerouting",
+                              return_value=Path("freerouting-2.1.0.jar")), \
+                 patch.object(router_backend, "find_java", return_value=None):
+                failed = jobs.run_pcb_job(rc, ["in", "out"], Path(td) / "job")
+            names = [s["stage"] for s in failed["stages"]]
+            check("缺 Java 在进入造板/布线前失败",
+                  failed["ok"] is False and "tools" in names
+                  and "board" not in names and "routing" not in names
+                  and any("Java" in b for b in failed["blockers"]),
+                  str(failed["stages"]) + str(failed["blockers"]))
+    finally:
+        _restore_env(saved)
+
+
 def test_integration_smoke() -> None:
     print("集成链路（KiCad + Freerouting 在场才跑，否则跳过）")
     kicad = kicad_backend.find_kicad()
     jar = router_backend.find_freerouting()
-    if kicad is None or jar is None:
+    if kicad is None or jar is None or router_backend.java_blocker(router_backend.find_java()):
         skip("工具缺失 → 跳过集成（PCB 为可选能力）")
         return
     with tempfile.TemporaryDirectory(prefix="vp_pcb_test_") as td:
@@ -245,7 +442,7 @@ def test_integration_netlist_to_fab() -> None:
     print("集成：网表 → 板 → DSN → 布线 → 回导 → DRC（工具在场才跑）")
     kicad = kicad_backend.find_kicad()
     jar = router_backend.find_freerouting()
-    if kicad is None or jar is None:
+    if kicad is None or jar is None or router_backend.java_blocker(router_backend.find_java()):
         skip("工具缺失 → 跳过（PCB 为可选能力）")
         return
     rc = "\n".join([
@@ -378,7 +575,10 @@ def test_jobs_offline() -> None:
     with tempfile.TemporaryDirectory(prefix="vp_pcb_job_") as td:
         r = jobs.run_pcb_job(rc, ["in", "out"], Path(td) / "j1")
         stages = {s["stage"]: s["ok"] for s in r["stages"]}
-        if kicad_backend.find_kicad() and router_backend.find_freerouting():
+        tools_ready = (kicad_backend.find_kicad() is not None
+                       and router_backend.find_freerouting() is not None
+                       and router_backend.java_blocker(router_backend.find_java()) is None)
+        if tools_ready:
             check("工具在场：全链任务 ok", r["ok"] and r["state"] == schema.CHECKED
                   and r["version_id"], str(r["stages"]))
             check("每阶段恰好执行一次（mapping 无重复）",
@@ -396,7 +596,7 @@ def test_jobs_offline() -> None:
         else:
             check("工具缺失：映射先过、tools 阶段报缺失",
                   stages.get("mapping") is True and stages.get("tools") is False
-                  and any(("KiCad" in b or "Freerouting" in b)
+                  and any(("KiCad" in b or "Freerouting" in b or "Java" in b)
                           for b in r["blockers"]),
                   str(r["stages"]) + str(r["blockers"]))
 
@@ -637,7 +837,7 @@ def test_integration_chinese_path_and_locked() -> None:
     print("集成：中文路径全链 + 锁定走线 DSN/SES 往返保真（工具在场才跑）")
     kicad = kicad_backend.find_kicad()
     jar = router_backend.find_freerouting()
-    if kicad is None or jar is None:
+    if kicad is None or jar is None or router_backend.java_blocker(router_backend.find_java()):
         skip("工具缺失 → 跳过")
         return
     # 1) 中文路径：目录与文件名都带中文
@@ -686,7 +886,8 @@ def test_integration_chinese_path_and_locked() -> None:
         lock_path.write_text(lock_script, encoding="utf-8")
         import subprocess as _sp
         proc = _sp.run([str(kicad.python), str(lock_path)], capture_output=True,
-                       text=True, encoding="utf-8", errors="replace", timeout=120, creationflags=subprocess.CREATE_NO_WINDOW)
+                       text=True, encoding="utf-8", errors="replace", timeout=120,
+                       env=kicad.subprocess_env(), **no_window_kwargs())
         check("锁定走线写入", "LOCKED_SAVED: True" in proc.stdout,
               (proc.stdout + proc.stderr)[-300:])
         if "LOCKED_SAVED: True" not in proc.stdout:
@@ -705,7 +906,8 @@ def test_integration_chinese_path_and_locked() -> None:
         vpath = tdir / "_verify.py"
         vpath.write_text(verify, encoding="utf-8")
         proc2 = _sp.run([str(kicad.python), str(vpath)], capture_output=True,
-                        text=True, encoding="utf-8", errors="replace", timeout=120, creationflags=subprocess.CREATE_NO_WINDOW)
+                        text=True, encoding="utf-8", errors="replace", timeout=120,
+                        env=kicad.subprocess_env(), **no_window_kwargs())
         check("往返后锁定走线仍在", "LOCKED_NOW: 1" in proc2.stdout,
               (proc2.stdout + proc2.stderr)[-300:])
 
@@ -884,6 +1086,7 @@ def test_acceptance_regressions() -> None:
 
         with patch.object(kicad_backend, "find_kicad", return_value=k), \
              patch.object(router_backend, "find_freerouting", return_value=Path("m.jar")), \
+             patch.object(router_backend, "java_blocker", return_value=None), \
              patch.object(kicad_backend, "build_board", side_effect=fake_build), \
              patch.object(kicad_backend, "export_dsn", return_value=(True, "x")), \
              patch.object(router_backend, "route", return_value=rr), \
@@ -930,7 +1133,7 @@ def test_acceptance_regressions() -> None:
                 sp.write_text(thin, encoding="utf-8")
                 pr = subprocess.run([str(kicad.python), str(sp)], capture_output=True,
                                     text=True, encoding="utf-8", errors="replace", timeout=120,
-                                    creationflags=subprocess.CREATE_NO_WINDOW)
+                                    env=kicad.subprocess_env(), **no_window_kwargs())
                 assert "THIN: True" in pr.stdout, pr.stdout[-200:]
                 res = kicad_backend.drc(kicad, pcb, tdir / "d.json")
                 check("F05 真实：0.25mm 走线违反 1.0mm 最小线宽 → DRC 报错",
@@ -1013,6 +1216,7 @@ def test_catalog_and_board_options() -> None:
 
 def main() -> int:
     for fn in (test_parse_log, test_spec_validation, test_finders_missing,
+               test_linux_discovery_and_launch,
                test_circuit_ir_and_mapping, test_schema_and_versions,
                test_connectivity_partition, test_jobs_offline,
                test_placement_signal_flow,

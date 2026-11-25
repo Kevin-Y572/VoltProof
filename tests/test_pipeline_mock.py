@@ -98,7 +98,7 @@ def main() -> int:
     if not _probe.ok:
         print("[环境不可用] 无法运行 ngspice："
               f"{(_probe.stderr or _probe.error_snippet)[:200]}\n"
-              "请安装 ngspice 后设 VOLTPROOF_NGSPICE 指向 ngspice.exe，或将其加入 PATH。")
+              "请安装 ngspice 后把它加入 PATH，或设 VOLTPROOF_NGSPICE 指向可执行文件。")
         return 2
 
     # 清结果缓存：多个用例共用同一请求文本，不能互相吃到缓存

@@ -27,18 +27,45 @@ VoltProof is a local workbench that checks AI-generated circuits with real [ngsp
 
 ## Installation
 
-Python 3.10+ and [ngspice](https://ngspice.sourceforge.io/) are required. Put ngspice on your `PATH`, or set `VOLTPROOF_NGSPICE` to the executable.
+VoltProof runs on Linux and Windows. You need Python 3.10+ and [ngspice](https://ngspice.sourceforge.io/). Put ngspice on your `PATH`, or set `VOLTPROOF_NGSPICE` to the executable (`/usr/bin/ngspice` on Linux, `ngspice.exe` on Windows).
+
+### Linux
+
+On Debian or Ubuntu, from a source checkout:
+
+```bash
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip ngspice
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+You can also build a `.deb`. It installs VoltProof, its Python dependencies, a `voltproof` command, and a desktop entry. ngspice is a package dependency. KiCad, Java, and Freerouting are not inside the package.
+
+```bash
+python3 scripts/build_linux_deb.py
+sudo apt install ./dist/voltproof_*.deb
+voltproof
+```
+
+Build it on the machine that will install it, with the same Python minor version. The script is reproducible: `scripts/build_linux_deb.py`. Project data goes to `~/.local/share/voltproof`. Model settings go to `~/.config/voltproof/settings.json`. Step-by-step package and PCB notes are in [docs/LINUX.md](docs/LINUX.md).
+
+### Windows
 
 ```bash
 pip install -r requirements.txt
-uvicorn app.main:app --reload
+uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
+
+A Windows portable zip is a separate build: `python scripts/build_portable.py`.
 
 Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Click **Example**, then **Simulate**. You should see a real RC low-pass waveform. No model API key is needed for this.
 
 The workbench defaults to Simplified Chinese. Use **中文 / English** in the header to switch; your choice is remembered.
 
-After `pip install .` you can also run `voltproof`.
+After `pip install .` you can also run `voltproof`. The Linux `.deb` provides the same command.
 
 | Page | Address |
 | --- | --- |
@@ -76,6 +103,22 @@ VoltProof includes a stdio MCP server with two tools: `design_circuit` (design a
 
 If you installed with pip, you can use `"command": "voltproof-mcp"`.
 
+## PCB export (experimental)
+
+The workbench, canvas, comparison page, and ngspice simulation do not need this. With the tools below installed, the full board-export chain runs on Linux and on Windows: preflight, mapping, KiCad board, Freerouting, SES import and zone fill, DRC and connectivity, then Gerber, drill, and BOM. If a tool is missing, **Generate PCB** stays disabled and the job stops before routing, with a setup hint.
+
+| Tool | Required | How to install |
+| --- | --- | --- |
+| KiCad | 10.x. The current stable line is 10.0.8 from `ppa:kicad/kicad-10.0-releases`. | Linux: the `kicad` package plus `kicad-footprints` (`/usr/bin/kicad-cli`, pcbnew on `/usr/bin/python3`, footprints in `/usr/share/kicad/footprints`). Windows: the installer, or `VOLTPROOF_KICAD` set to the root that contains `bin/kicad-cli.exe` and `bin/python.exe`. |
+| Java | 21 or newer | Linux: `openjdk-21-jre-headless`. `VOLTPROOF_JAVA` may point at the `java` executable. |
+| Freerouting | JVM JAR `freerouting-2.1.0.jar` | Put it in `/opt/freerouting/` or set `VOLTPROOF_FREEROUTING` to the jar path. |
+
+Do not use the Freerouting 2.5.0 native executable: it can crash and hang. JAR releases from 2.2 onward are built for Java 25. `freerouting-2.1.0.jar` is the JVM JAR that runs on Java 21.
+
+Flatpak KiCad is not detected. Use the distro or PPA packages, or point `VOLTPROOF_KICAD` at a prefix with `bin/kicad-cli` and a Python that can import `pcbnew`.
+
+Copy-paste setup for a Debian/Ubuntu machine, and the commands to run before a real board export, are in [docs/LINUX.md](docs/LINUX.md).
+
 ## Notes
 
 If ngspice is not on your `PATH`:
@@ -93,8 +136,6 @@ The command-line pipeline is:
 ```bash
 python -m app.pipeline "Design an RC low-pass filter with a 1 kHz cutoff"
 ```
-
-PCB export is experimental and optional. It needs KiCad 10.x and Freerouting; if they are missing, simulation still works.
 
 VoltProof is a local, single-user tool. Bind it to `127.0.0.1`. Do not expose it to the public internet without authentication and isolation.
 

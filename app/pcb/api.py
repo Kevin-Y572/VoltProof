@@ -14,7 +14,6 @@ jobs/{id}（SSE 接线留待前端页签时一并做——on_stage 回调已就�
 from __future__ import annotations
 
 import json
-import shutil
 import threading
 import time
 import uuid
@@ -73,20 +72,8 @@ def _pcb_root(ws) -> Path:
 # ---------------------------------------------------------------------------
 
 def _java_available() -> bool:
-    """java 在场判定：VOLTPROOF_JAVA > which > 实跑 `java -version` 探测。
-    which 在部分 shell 的 PATH 解析不到 java（bench 环境实测），兜底实跑。"""
-    import os
-    import subprocess as _sp
-    if os.environ.get("VOLTPROOF_JAVA"):
-        return True
-    if shutil.which("java") or shutil.which("java.exe"):
-        return True
-    try:
-        pr = _sp.run(["java", "-version"], capture_output=True, timeout=15,
-                     creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
-        return pr.returncode == 0
-    except (OSError, _sp.TimeoutExpired):
-        return False
+    """与任务层同一套判定：找得到可执行文件，且主版本 ≥ 21。"""
+    return router_backend.java_blocker(router_backend.find_java()) is None
 
 @router.get("/capabilities")
 def capabilities():
@@ -338,7 +325,7 @@ def update_placement(version_id: str, req: dict):
         return JSONResponse(status_code=410, content={"error": i18n.t("api.pcb_archive_missing")})
     kicad = kicad_backend.find_kicad()
     jar = router_backend.find_freerouting()
-    if kicad is None or jar is None:
+    if kicad is None or jar is None or not _java_available():
         return JSONResponse(status_code=400, content={"error": i18n.t("api.pcb_tools")})
     job_id = schema.new_job_id()
     result = jobs.run_pcb_job(netlist, ports, _pcb_root(ws) / job_id, ws=ws,
