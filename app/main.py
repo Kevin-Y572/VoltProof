@@ -17,7 +17,8 @@
   /api/files 只在当前工作区内取文件（路径守卫在 Workspace.resolve）。
 
 安全注意：/api/ws/*、/api/files/*、/api/llm/* 是无鉴权的本地信任端点，
-只应绑定 127.0.0.1 单机使用——公网部署前必须加鉴权（见 README 安全章节）。
+只应绑定 127.0.0.1 单机使用。网表和模型生成的 Python 只做命令/路径/AST
+检查，不是操作系统沙箱。说明见 README 的 Notes / 补充说明。
 /api/llm/config 接受用户自填的供应商 URL，llm.validate_base_url 做 SSRF 校验
 （仅 http/https、拒内网/环回地址）；API Key 只落本机 settings.json、响应脱敏。
 """

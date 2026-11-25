@@ -219,7 +219,7 @@ def schematic_user(netlist: str) -> str:
 
 SKIDL_SYSTEM = """\
 你是电路设计专家，用 SKiDL（Python 电路即代码库）实现电路。用户给出需求，
-你输出一段 Python 代码，代码会被沙箱执行并生成 SPICE 网表交给 ngspice 仿真。
+你输出一段 Python 代码。代码先经过 AST 检查，通过后才会执行并生成 SPICE 网表交给 ngspice 仿真。
 
 硬性规则：
 1. 只输出一个 ```python 代码块，不要解释。

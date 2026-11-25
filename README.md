@@ -98,6 +98,8 @@ PCB export is experimental and optional. It needs KiCad 10.x and Freerouting; if
 
 VoltProof is a local, single-user tool. Bind it to `127.0.0.1`. Do not expose it to the public internet without authentication and isolation.
 
+Netlist and model-written Python checks reject dangerous `.control` commands, include paths that resolve outside the simulation directory, and Python dunder attribute access. ngspice is started with `-n` (`--no-spiceinit`) and without API keys in its environment. These checks are not an operating-system sandbox.
+
 ## License
 
 [Apache-2.0](LICENSE)
