@@ -60,7 +60,7 @@ def ensure_ngspice() -> str:
     cand = Path(os.environ.get("VOLTPROOF_NGSPICE") or "")
     if not cand.is_file():
         sys.exit("找不到 ngspice：PATH 上没有，且未设 VOLTPROOF_NGSPICE。\n"
-                 "请把 ngspice 加入 PATH，或设 VOLTPROOF_NGSPICE 指向 ngspice.exe")
+                 "请把 ngspice 加入 PATH，或设 VOLTPROOF_NGSPICE 指向可执行文件")
     os.environ["PATH"] = f"{cand.parent}{os.pathsep}{os.environ.get('PATH', '')}"
     os.environ.setdefault("VOLTPROOF_NGSPICE", str(cand))
     return str(cand)

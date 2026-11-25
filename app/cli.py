@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 import socket
 import threading
 import time
@@ -46,7 +47,8 @@ def main() -> None:
     print(f"VoltProof 已启动：{url}")
     print(f"  对话页     {url}")
     print(f"  同题对照   {url}/compare.html")
-    print("关闭本窗口或按 Ctrl+C 停止服务。产物与会话保存在包目录 out/ 下。")
+    data_dir = os.environ.get("VOLTPROOF_WORKSPACE") or "包目录 out"
+    print(f"关闭本窗口或按 Ctrl+C 停止服务。产物与会话保存在 {data_dir} 下。")
     try:
         server.run()
     except KeyboardInterrupt:

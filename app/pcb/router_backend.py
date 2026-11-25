@@ -18,13 +18,19 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
+from .procutil import no_window_kwargs
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_JAVA_MIN = 21
+_JAVA_VERSION_RE = re.compile(r'version "(?P<ver>[^"]+)"')
 
 # 官方帮助漏列但解析器接受的新参数名（-mp 已弃用会告警）
 _MAX_PASSES_ARG = "--router.autorouter.max_passes"
@@ -58,19 +64,129 @@ def find_freerouting() -> Path | None:
     return _find_freerouting_cached()
 
 
+def _freerouting_search_dirs() -> list[Path]:
+    """开发树、发行版约定路径、用户数据目录。不把 JAR 打进安装包。"""
+    dirs = [_REPO_ROOT, _REPO_ROOT / "freerouting", Path("/opt/freerouting")]
+    xdg = (os.environ.get("XDG_DATA_HOME") or "").strip()
+    base = Path(xdg) if xdg else Path.home() / ".local" / "share"
+    dirs.append(base / "voltproof")
+    return dirs
+
+
+def _first_jar(dirs: list[Path]) -> Path | None:
+    for directory in dirs:
+        if not directory.is_dir():
+            continue
+        for cand in sorted(directory.glob("freerouting-*.jar"), reverse=True):
+            if cand.is_file():
+                return cand.resolve()
+    return None
+
+
 @lru_cache(maxsize=1)
 def _find_freerouting_cached() -> Path | None:
-    env = os.environ.get("VOLTPROOF_FREEROUTING")
-    if env and Path(env).is_file():
-        return Path(env)
-    for pat in ("freerouting-*.jar",):
-        for cand in sorted(_REPO_ROOT.glob(pat), reverse=True):
-            if cand.is_file():
-                return cand
-        for cand in sorted((_REPO_ROOT / "freerouting").glob(pat), reverse=True):
-            if cand.is_file():
-                return cand
+    env = (os.environ.get("VOLTPROOF_FREEROUTING") or "").strip()
+    if env:
+        path = Path(env)
+        if path.is_file():
+            return path.resolve()
+        return None
+    return _first_jar(_freerouting_search_dirs())
+
+
+def find_java() -> Path | None:
+    """定位 java 可执行文件。VOLTPROOF_JAVA 优先；设了但找不到则不再猜。"""
+    return _find_java_cached()
+
+
+def _java_candidates() -> list[Path]:
+    found: list[Path] = []
+
+    def add(path: Path | None) -> None:
+        if path is None:
+            return
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return
+        if resolved.is_file() and resolved not in found:
+            found.append(resolved)
+
+    for name in ("java", "java.exe"):
+        located = shutil.which(name)
+        if located:
+            add(Path(located))
+    if sys.platform != "win32":
+        for raw in (
+            "/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
+            "/usr/lib/jvm/java-21-openjdk-arm64/bin/java",
+            "/usr/lib/jvm/java-25-openjdk-amd64/bin/java",
+            "/usr/lib/jvm/java-25-openjdk-arm64/bin/java",
+            "/usr/lib/jvm/default-java/bin/java",
+        ):
+            add(Path(raw))
+    return found
+
+
+def java_major(java: Path) -> int | None:
+    """解析 ``java -version`` 的主版本。1.8 记为 8。跑不起来则返回 None。"""
+    try:
+        proc = subprocess.run(
+            [str(java), "-version"], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=15, **no_window_kwargs())
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    text = (proc.stderr or "") + "\n" + (proc.stdout or "")
+    match = _JAVA_VERSION_RE.search(text)
+    if not match:
+        return None
+    parts = match.group("ver").split(".")
+    try:
+        if parts[0] == "1" and len(parts) > 1:
+            return int(parts[1])
+        return int(parts[0])
+    except ValueError:
+        return None
+
+
+def java_blocker(java: Path | None) -> str | None:
+    """Java 21+ 才算就绪。返回给任务层的中文原因；就绪时返回 None。"""
+    if java is None:
+        return ("Java 未找到（安装 Java 21 或更高版本，或设 VOLTPROOF_JAVA "
+                "指向 java 可执行文件）")
+    major = java_major(java)
+    if major is None:
+        return f"无法确认 Java 版本（{java}）。Freerouting 需要 Java 21 或更高版本。"
+    if major < _JAVA_MIN:
+        return (f"Java {major} 过旧（{java}）。Freerouting JVM JAR 需要 "
+                f"Java {_JAVA_MIN} 或更高版本。")
     return None
+
+
+def _select_java(candidates: list[Path]) -> Path | None:
+    """有 21+ 就用 21+；只有更旧的运行时也返回它，让调用方报版本而不是“没找到”。"""
+    fallback: Path | None = None
+    for candidate in candidates:
+        major = java_major(candidate)
+        if major is not None and major >= _JAVA_MIN:
+            return candidate
+        if fallback is None:
+            fallback = candidate
+    return fallback
+
+
+@lru_cache(maxsize=1)
+def _find_java_cached() -> Path | None:
+    env = (os.environ.get("VOLTPROOF_JAVA") or "").strip()
+    if env:
+        path = Path(env)
+        if path.is_file():
+            return path.resolve()
+        located = shutil.which(env)
+        if located:
+            return Path(located).resolve()
+        return None
+    return _select_java(_java_candidates())
 
 
 # —— 日志解析（锚点均来自真实运行日志，阶段 A 实测样本）——
@@ -126,7 +242,7 @@ def route(jar: Path, dsn: Path, ses_out: Path, workdir: Path,
     problems: list[str] = []
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout_s,
-                              cwd=str(workdir), creationflags=subprocess.CREATE_NO_WINDOW)
+                              cwd=str(workdir), **no_window_kwargs())
         # Windows 下子进程异常退出时 stdout/stderr 可能为 None（实测偶发）
         log = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
         killed = False

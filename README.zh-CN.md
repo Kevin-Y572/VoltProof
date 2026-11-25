@@ -27,18 +27,45 @@ VoltProof 是一个本地工作台，用真实的 [ngspice](https://ngspice.sour
 
 ## 安装
 
-需要 Python 3.10 或更高版本，以及 [ngspice](https://ngspice.sourceforge.io/)。请将 ngspice 加入系统 `PATH`，或用 `VOLTPROOF_NGSPICE` 指定可执行文件路径。
+VoltProof 在 Linux 和 Windows 上都可以用。需要 Python 3.10 或更高版本，以及 [ngspice](https://ngspice.sourceforge.io/)。请把 ngspice 加入 `PATH`，或用 `VOLTPROOF_NGSPICE` 指向可执行文件（Linux 多为 `/usr/bin/ngspice`，Windows 多为 `ngspice.exe`）。
+
+### Linux
+
+在 Debian / Ubuntu 上从源码启动：
+
+```bash
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip ngspice
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+也可以构建 `.deb`。包里有 VoltProof、Python 依赖、`voltproof` 命令和桌面入口。ngspice 是包依赖，由系统安装。KiCad、Java 和 Freerouting 不打进包里。
+
+```bash
+python3 scripts/build_linux_deb.py
+sudo apt install ./dist/voltproof_*.deb
+voltproof
+```
+
+请在要安装的那台机器上构建，并使用相同的 Python 次版本。构建脚本是 `scripts/build_linux_deb.py`，可以重复运行。数据在 `~/.local/share/voltproof`，模型设置在 `~/.config/voltproof/settings.json`。打包和 PCB 的逐步说明见 [docs/LINUX.md](docs/LINUX.md)。
+
+### Windows
 
 ```bash
 pip install -r requirements.txt
-uvicorn app.main:app --reload
+uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
+
+Windows 便携 zip 是另一条构建：`python scripts/build_portable.py`。
 
 打开 [http://127.0.0.1:8000](http://127.0.0.1:8000)，点「示例」，再点「仿真」，就能看到一个 RC 低通的真实波形。这一步不用配置模型密钥。
 
 工作台默认是简体中文。顶栏的「中文 / English」可以切换界面语言，选择会被记住。
 
-也可以先执行 `pip install .`，再运行 `voltproof`。
+也可以先执行 `pip install .`，再运行 `voltproof`。Linux 的 `.deb` 提供同一个命令。
 
 | 页面 | 地址 |
 | --- | --- |
@@ -76,6 +103,22 @@ VoltProof 自带 stdio MCP 服务，提供两个工具：`design_circuit`（设�
 
 如果是用 pip 安装的，可以把 `"command"` 写成 `"voltproof-mcp"`。
 
+## PCB 导出（实验性）
+
+工作台、画板、对照页和 ngspice 仿真都不依赖这一节。装上下表里的工具之后，Linux 和 Windows 都会跑完整条制板链：预检、映射、KiCad 造板、Freerouting、SES 回导与铺铜、DRC 与连通性，然后是 Gerber、钻孔和 BOM。缺工具时，「生成 PCB」保持禁用，任务会在布线之前失败，并给出安装提示。
+
+| 工具 | 要求 | 安装方式 |
+| --- | --- | --- |
+| KiCad | 10.x。当前稳定线是 `ppa:kicad/kicad-10.0-releases` 里的 10.0.8。 | Linux：`kicad` 与 `kicad-footprints`（`/usr/bin/kicad-cli`，`/usr/bin/python3` 能导入 pcbnew，封装在 `/usr/share/kicad/footprints`）。Windows：安装器，或把 `VOLTPROOF_KICAD` 指到含 `bin/kicad-cli.exe` 与 `bin/python.exe` 的根目录。 |
+| Java | 21 或更高 | Linux：`openjdk-21-jre-headless`。`VOLTPROOF_JAVA` 可以指向 `java` 可执行文件。 |
+| Freerouting | JVM JAR `freerouting-2.1.0.jar` | 放到 `/opt/freerouting/`，或设 `VOLTPROOF_FREEROUTING` 为 jar 路径。 |
+
+不要用 Freerouting 2.5.0 的原生可执行文件，它会崩溃并挂死。2.2 及之后的 JAR 按 Java 25 构建。`freerouting-2.1.0.jar` 是能在 Java 21 上跑的 JVM JAR。
+
+Flatpak 版 KiCad 不会被自动发现。请装发行版或 PPA 包，或把 `VOLTPROOF_KICAD` 指到含 `bin/kicad-cli`、且其 Python 能 `import pcbnew` 的前缀。
+
+Debian/Ubuntu 上可直接复制的安装命令，以及做一次真实制板回归前要跑的检查，写在 [docs/LINUX.md](docs/LINUX.md)。
+
 ## 补充说明
 
 如果 ngspice 还不在 `PATH` 里：
@@ -93,8 +136,6 @@ export VOLTPROOF_NGSPICE=/usr/bin/ngspice
 ```bash
 python -m app.pipeline "设计一个截止频率 1 kHz 的 RC 低通滤波器"
 ```
-
-PCB 导出是实验性的可选功能，需要 KiCad 10.x 和 Freerouting。没有它们也不影响仿真。
 
 VoltProof 按本地单用户工具来设计，请绑定 `127.0.0.1`。不要在未加鉴权和隔离的情况下把它暴露到公网。
 

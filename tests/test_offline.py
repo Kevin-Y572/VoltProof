@@ -320,7 +320,7 @@ def main() -> int:
         shutil.rmtree(tmp, ignore_errors=True)
         print("[环境不可用] 无法运行 ngspice："
               f"{(probe.stderr or probe.error_snippet)[:200]}\n"
-              "请安装 ngspice 后设 VOLTPROOF_NGSPICE 指向 ngspice.exe，或将其加入 PATH。")
+              "请安装 ngspice 后把它加入 PATH，或设 VOLTPROOF_NGSPICE 指向可执行文件。")
         if FAILURES:
             print("失败: " + ", ".join(FAILURES))
         return 1 if FAILURES else 2

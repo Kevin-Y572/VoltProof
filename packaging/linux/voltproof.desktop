@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=VoltProof
+GenericName=Circuit workbench
+Comment=Check circuit answers with ngspice
+Comment[zh_CN]=用 ngspice 验证电路答案
+Exec=voltproof
+Icon=voltproof
+Terminal=true
+Categories=Education;Science;Electronics;
+Keywords=spice;ngspice;circuit;
+StartupNotify=false

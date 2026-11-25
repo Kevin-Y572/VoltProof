@@ -1,28 +1,39 @@
 """KiCad 子进程适配器：造板 / DSN 导出 / SES 回导 / 铺铜 / DRC / 制板导出。
 
-KiCad 定位：环境变量 VOLTPROOF_KICAD（KiCad 根目录，含 bin/）> PATH 上的
-kicad-cli > 常见安装/便携位置。返回 None 表示不可用——PCB 是可选能力，
+KiCad 定位（Linux 与 Windows 都认）：
+环境变量 VOLTPROOF_KICAD（安装根目录，或 kicad-cli 本身）>
+PATH 上的 kicad-cli > 常见安装位置。返回 None 表示不可用——PCB 是可选能力，
 缺失时调用方应降级提示而不是崩溃（与 ngspice 必需的定位策略不同）。
+
+两种安装树都有效：
+- Windows / 便携树：``<根>/bin/kicad-cli.exe`` 与 ``<根>/bin/python.exe``。
+- Linux 发行版或前缀安装：``<根>/bin/kicad-cli``（常见根是 ``/usr``），
+  pcbnew 由该前缀里的 python3 或系统 ``/usr/bin/python3`` 加载。
+
+显式设置了 VOLTPROOF_KICAD 但目录对不上时，不再回退到别的安装。
 
 关键事实（阶段 A 实测，2026-10-23）：
 - kicad-cli 命令面没有 DSN 导出 / SES 导入（pcb 只有 drc/export/import/render/upgrade），
-  路由交换必须用 KiCad 自带 python（bin/python.exe，含 pcbnew 模块）的
-  **模块级函数** ExportSpecctraDSN(board, path) / ImportSpecctraSES(board, path)。
+  路由交换必须用带 pcbnew 的 Python 的模块级函数
+  ExportSpecctraDSN(board, path) / ImportSpecctraSES(board, path)。
 - pcbnew 无法被本进程 import（它是 KiCad 私有构建），所以所有板操作都是
-  "生成一段固定形状的 python 脚本 → kicad python 子进程执行"。
+  "生成一段固定形状的 python 脚本 → KiCad 的 python 子进程执行"。
   脚本内容只接受白名单字段（见 _SAFE_* 正则），杜绝注入。
 - 铺铜回填同样只有 python API（ZONE_FILLER），CLI 无此命令。
-- NSIS 安装器 /S 需要 UAC；便携树（7z 解包安装器）开箱即用，本适配器两者通吃。
 """
 from __future__ import annotations
 
 import json
 import os
 import re
+import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+
+from .procutil import no_window_kwargs
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -41,23 +52,37 @@ class SpecError(ValueError):
 @dataclass(frozen=True)
 class KiCad:
     root: Path
+    cli_path: Path
+    python_path: Path
+    footprints_path: Path
+    pythonpath: str = ""
 
     @property
     def cli(self) -> Path:
-        return self.root / "bin" / "kicad-cli.exe"
+        return self.cli_path
 
     @property
     def python(self) -> Path:
-        return self.root / "bin" / "python.exe"
+        return self.python_path
 
     @property
     def footprints(self) -> Path:
-        return self.root / "share" / "kicad" / "footprints"
+        return self.footprints_path
+
+    def subprocess_env(self) -> dict[str, str] | None:
+        """pcbnew 不在解释器默认路径上时补 PYTHONPATH。否则沿用父进程环境。"""
+        if not self.pythonpath:
+            return None
+        env = os.environ.copy()
+        prev = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = self.pythonpath + (os.pathsep + prev if prev else "")
+        return env
 
     def version(self) -> str:
         try:
             out = subprocess.run([str(self.cli), "version"], capture_output=True,
-                                 text=True, encoding="utf-8", errors="replace", timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
+                                 text=True, encoding="utf-8", errors="replace", timeout=30,
+                                 env=self.subprocess_env(), **no_window_kwargs())
             if out.returncode == 0:
                 return out.stdout.strip()
         except (OSError, subprocess.TimeoutExpired):
@@ -70,30 +95,190 @@ def find_kicad() -> KiCad | None:
     return _find_kicad_cached()
 
 
-@lru_cache(maxsize=1)
-def _find_kicad_cached() -> KiCad | None:
-    env = os.environ.get("VOLTPROOF_KICAD")
-    candidates: list[Path] = []
-    if env:
-        candidates.append(Path(env))
-    on_path = None
+def _distro_prefix(root: Path) -> bool:
+    """发行版把 kicad-cli 和系统 python3 放在同一前缀里（/usr、/usr/local）。"""
     try:
-        import shutil
-        on_path = shutil.which("kicad-cli")
-    except Exception:
-        on_path = None
-    if on_path:  # PATH 上的 exe → 根目录在 exe 的上两级
-        candidates.append(Path(on_path).resolve().parent.parent)
-    pf = os.environ.get("ProgramFiles", r"C:\Program Files")
-    if Path(pf).is_dir():  # 正式安装：C:\Program Files\KiCad\<版本>\
+        resolved = root.resolve()
+    except OSError:
+        resolved = root
+    return resolved in {Path("/usr"), Path("/usr/local"), Path("/")}
+
+
+def _has_pcbnew(directory: Path) -> bool:
+    if not directory.is_dir():
+        return False
+    if (directory / "pcbnew.py").is_file():
+        return True
+    return any(directory.glob("_pcbnew*.so")) or any(directory.glob("pcbnew*.so"))
+
+
+def _pcbnew_dirs(root: Path) -> list[Path]:
+    """前缀下可能存放 pcbnew 的目录。发行版常见是 lib/python3/dist-packages。"""
+    patterns = [
+        root / "lib" / "python3" / "dist-packages",
+        root / "lib" / "python3" / "site-packages",
+        root / "lib" / "kicad" / "lib" / "python3" / "dist-packages",
+        root / "lib" / "kicad" / "lib" / "python3" / "site-packages",
+        root / "local" / "lib" / "python3" / "dist-packages",
+    ]
+    for lib_name in ("lib", "lib64"):
+        lib = root / lib_name
+        if not lib.is_dir():
+            continue
+        try:
+            children = list(lib.iterdir())
+        except OSError:
+            continue
+        for child in children:
+            if child.name.startswith("python3"):
+                patterns.append(child / "dist-packages")
+                patterns.append(child / "site-packages")
+    found: list[Path] = []
+    seen: set[Path] = set()
+    for directory in patterns:
+        try:
+            key = directory.resolve()
+        except OSError:
+            key = directory
+        if key in seen:
+            continue
+        seen.add(key)
+        if _has_pcbnew(directory):
+            found.append(directory)
+    return found
+
+
+def _cli_path(root: Path) -> Path | None:
+    for name in ("kicad-cli.exe", "kicad-cli"):
+        candidate = root / "bin" / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _python_for(root: Path, pcbnew_dirs: list[Path]) -> Path | None:
+    """选择能 import pcbnew 的解释器。
+
+    Windows 便携树用 bin/python.exe。Linux 发行版包把 pcbnew 装进系统
+    python3 的 dist-packages，解释器就是该前缀的 bin/python3（/usr/bin/python3）。
+    独立前缀若自带 bin/python3，即使 pcbnew 落在解释器自己的库目录里也采用它。
+    """
+    for name in ("python.exe", "python3.exe"):
+        candidate = root / "bin" / name
+        if candidate.is_file():
+            return candidate
+    bundled: list[Path] = []
+    for name in ("python3", "python"):
+        candidate = root / "bin" / name
+        if candidate.is_file():
+            bundled.append(candidate)
+    if bundled and (pcbnew_dirs or not _distro_prefix(root)):
+        return bundled[0]
+    if pcbnew_dirs:
+        system = Path("/usr/bin/python3")
+        if system.is_file():
+            return system
+    return None
+
+
+def _footprints_dir(root: Path) -> Path:
+    """封装库目录。安装树自带的 share 优先，其次是 KiCad 自己的环境变量。"""
+    own = root / "share" / "kicad" / "footprints"
+    if own.is_dir():
+        return own
+    for key in ("KICAD10_FOOTPRINT_DIR", "KICAD9_FOOTPRINT_DIR",
+                "KICAD8_FOOTPRINT_DIR", "KICAD_FOOTPRINT_DIR"):
+        value = os.environ.get(key)
+        if value and Path(value).is_dir():
+            return Path(value)
+    for fallback in (Path("/usr/share/kicad/footprints"),
+                     Path("/usr/local/share/kicad/footprints")):
+        if fallback.is_dir():
+            return fallback
+    return own
+
+
+def _roots_from_spec(spec: Path) -> list[Path]:
+    """VOLTPROOF_KICAD 可以是安装根、bin 目录，或 kicad-cli 文件。"""
+    if spec.is_file() and spec.name.lower() in {"kicad-cli", "kicad-cli.exe"}:
+        return [spec.parent.parent]
+    if (spec / "kicad-cli").is_file() or (spec / "kicad-cli.exe").is_file():
+        return [spec.parent]
+    return [spec]
+
+
+def _kicad_from_root(root: Path) -> KiCad | None:
+    """一个候选根目录能同时找到 cli 和 pcbnew 解释器才算装好了。"""
+    try:
+        root = root.resolve()
+    except OSError:
+        return None
+    cli = _cli_path(root)
+    if cli is None:
+        return None
+    pcbnew_dirs = _pcbnew_dirs(root)
+    python = _python_for(root, pcbnew_dirs)
+    if python is None:
+        return None
+    return KiCad(root=root, cli_path=cli, python_path=python,
+                 footprints_path=_footprints_dir(root),
+                 pythonpath=os.pathsep.join(str(d) for d in pcbnew_dirs))
+
+
+def _kicad_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    for name in ("kicad-cli", "kicad-cli.exe"):
+        on_path = shutil.which(name)
+        if on_path:
+            candidates.append(Path(on_path).resolve().parent.parent)
+            break
+    if sys.platform == "win32":
+        pf = os.environ.get("ProgramFiles", r"C:\Program Files")
         kd = Path(pf) / "KiCad"
         if kd.is_dir():
             for child in sorted(kd.iterdir(), reverse=True):
                 candidates.append(child)
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            kd_local = Path(local) / "Programs" / "KiCad"
+            if kd_local.is_dir():
+                for child in sorted(kd_local.iterdir(), reverse=True):
+                    candidates.append(child)
+    else:
+        candidates.extend([Path("/usr"), Path("/usr/local"), Path("/opt/kicad")])
+        opt = Path("/opt")
+        if opt.is_dir():
+            try:
+                children = list(opt.iterdir())
+            except OSError:
+                children = []
+            named = [p for p in children if p.name.lower().startswith("kicad")]
+            candidates.extend(sorted(named, key=lambda p: p.name, reverse=True))
     candidates.append(_REPO_ROOT / "kicad-x")  # 便携树（7z 解包安装器）
-    for cand in candidates:
-        if (cand / "bin" / "kicad-cli.exe").is_file() and (cand / "bin" / "python.exe").is_file():
-            return KiCad(cand.resolve())
+    return candidates
+
+
+@lru_cache(maxsize=1)
+def _find_kicad_cached() -> KiCad | None:
+    env = (os.environ.get("VOLTPROOF_KICAD") or "").strip()
+    if env:
+        for root in _roots_from_spec(Path(env)):
+            hit = _kicad_from_root(root)
+            if hit is not None:
+                return hit
+        return None
+    seen: set[str] = set()
+    for cand in _kicad_candidates():
+        try:
+            key = str(cand.resolve())
+        except OSError:
+            key = str(cand)
+        if key in seen:
+            continue
+        seen.add(key)
+        hit = _kicad_from_root(cand)
+        if hit is not None:
+            return hit
     return None
 
 
@@ -159,7 +344,7 @@ def _run_kicad_python(k: KiCad, script: str, workdir: Path, timeout: int = 120) 
     try:
         proc = subprocess.run(
             [str(k.python), str(script_path)], capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=timeout, cwd=str(workdir), creationflags=subprocess.CREATE_NO_WINDOW)
+            timeout=timeout, cwd=str(workdir), env=k.subprocess_env(), **no_window_kwargs())
     except subprocess.TimeoutExpired:
         return False, f"KiCad python 超时（{timeout}s）"
     except OSError as e:
@@ -356,7 +541,7 @@ def drc(k: KiCad, pcb: Path, out_json: Path, timeout: int = 120) -> dict:
         [str(k.cli), "pcb", "drc", "--output", str(out_json), "--format", "json",
          str(pcb)],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
-        creationflags=subprocess.CREATE_NO_WINDOW)
+        env=k.subprocess_env(), **no_window_kwargs())
     result = {"ok": proc.returncode == 0, "violations": None, "violations_warning": None,
               "violations_all": None, "unconnected": None, "warning_items": [],
               "stdout": proc.stdout[-2000:], "stderr": proc.stderr[-500:]}
@@ -413,7 +598,7 @@ def export_fab(k: KiCad, pcb: Path, out_dir: Path, timeout: int = 120) -> tuple[
                  ["pcb", "export", "drill", "--output", str(out_dir), str(pcb)]):
         try:
             proc = subprocess.run([str(k.cli), *args], capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                  timeout=timeout, creationflags=subprocess.CREATE_NO_WINDOW)
+                                  timeout=timeout, env=k.subprocess_env(), **no_window_kwargs())
             oks.append(proc.returncode == 0)
             outs += proc.stdout[-500:] + proc.stderr[-200:]
         except (subprocess.TimeoutExpired, OSError) as e:
