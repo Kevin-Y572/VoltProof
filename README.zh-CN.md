@@ -107,6 +107,8 @@ VoltProof 自带 stdio MCP 服务，提供两个工具：`design_circuit`（设�
 
 工作台、画板、对照页和 ngspice 仿真都不依赖这一节。装上下表里的工具之后，Linux 和 Windows 都会跑完整条制板链：预检、映射、KiCad 造板、Freerouting、SES 回导与铺铜、DRC 与连通性，然后是 Gerber、钻孔和 BOM。缺工具时，「生成 PCB」保持禁用，任务会在布线之前失败，并给出安装提示。
 
+这一节仍然是实验功能。可选的布局代理只能根据已验证电路提出封装坐标；布线或 DRC 失败后，也只能做有界修改。合法化器会检查每一份提案，铜还是 Freerouting 布的。模型不输出走线，也不写 `.kicad_pcb`，跑完不等于可以投产。模型没开、不可用或提案被拒绝时，仍用原来的信号流布局。理想运放不能直接上板：「换成 LM358 候选」会补供电脚、重新仿真，并保存一个新的项目候选，不改当前采用的电路。说明和无工具检查（`scripts/pcb_smoke.py --agent-offline`）在 [docs/LINUX.md](docs/LINUX.md)。
+
 | 工具 | 要求 | 安装方式 |
 | --- | --- | --- |
 | KiCad | 10.x。当前稳定线是 `ppa:kicad/kicad-10.0-releases` 里的 10.0.8。 | Linux：`kicad` 与 `kicad-footprints`（`/usr/bin/kicad-cli`，`/usr/bin/python3` 能导入 pcbnew，封装在 `/usr/share/kicad/footprints`）。Windows：安装器，或把 `VOLTPROOF_KICAD` 指到含 `bin/kicad-cli.exe` 与 `bin/python.exe` 的根目录。 |

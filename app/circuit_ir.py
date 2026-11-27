@@ -101,6 +101,14 @@ def _is_zero_source(line: str, kind: str, n_nodes: int) -> bool:
     return False
 
 
+def _catalog_subckt(model: str, n_pins: int) -> bool:
+    """型号和脚数同时命中审校库时，X 才是可上板的器件。"""
+    if not model or n_pins < 1:
+        return False
+    from .pcb.parts import subckt_is_catalog_part
+    return subckt_is_catalog_part(model, n_pins)
+
+
 def _model_token(line: str) -> str:
     """元件的型号/值字段。R/C/L/V/D 取第 4 token；Q 第 5、M 第 6、X 最后一个
     （节点数不同）。schematic_layout 的 Elem 不提取 Q/M/X 的型号，映射层需要，
@@ -160,6 +168,11 @@ def netlist_to_ir(netlist: str) -> dict:
         role = _ROLES.get(kind, "blocked")
         note = ""
         block_reason = ""
+        # 审校库里的子电路（如已补供电的 LM358）是实物器件。
+        # 三脚理想运放对不上库的引脚数，仍走下面的阻断文案。
+        if kind == "X" and _catalog_subckt(value, len(el_nets)):
+            role = "device"
+            note = value
         if role == "stimulus" and _is_zero_source(line, kind, len(el_nets)):
             role = "blocked"
             note = i18n.t("api.block.zero")

@@ -257,9 +257,10 @@
       "match": {"kind": "X", "model_contains": ["lm358"]},
       "footprint": {"lib": "Package_DIP", "name": "DIP-8_W7.62mm"},
       "spice_pin_order": ["IN+", "IN-", "V+", "V-", "OUT"],
-      "pad_functions": {"1": "OUT_A", "2": "IN_A-", "3": "IN_A+", "4": "V-", "5": "IN_B+", "6": "IN_B-", "7": "OUT_B", "8": "V+"},
+      "pad_functions": {"1": "OUT", "2": "IN-", "3": "IN+", "4": "V-", "5": "IN_B+", "6": "IN_B-", "7": "OUT_B", "8": "V+"},
+      "pad_ties": {"5": "GND", "6": "{ref}_UB", "7": "{ref}_UB"},
       "polarized": true,
-      "notes": "理想运放不可直接映射本条目：须先在电路层补供电（V+/V-）与去耦，形成新电路候选并重新仿真验证（方案 §4.2）；子电路引脚序以所用 SPICE 宏模型为准，接入时逐模型核对。DIP-8 脚位：1=OUT1 2=IN1- 3=IN1+ 4=GND 5=IN2+ 6=IN2- 7=OUT2 8=V+",
+      "notes": "通道 A 按 SPICE 位序 IN+ IN- V+ V- OUT 上板。通道 B（5/6/7）在板上接成跟随器到地，不进入 SPICE 子电路。理想运放不能直接映射：先走替换流程补供电和去耦，形成新候选并重新仿真。DIP-8：1=OUT1 2=IN1- 3=IN1+ 4=V- 5=IN2+ 6=IN2- 7=OUT2 8=V+",
       "version": 1
     },
     {
@@ -270,9 +271,10 @@
       "match": {"kind": "X", "model_contains": ["lm358"]},
       "footprint": {"lib": "Package_SO", "name": "SOIC-8_3.9x4.9mm_P1.27mm"},
       "spice_pin_order": ["IN+", "IN-", "V+", "V-", "OUT"],
-      "pad_functions": {"1": "OUT_A", "2": "IN_A-", "3": "IN_A+", "4": "V-", "5": "IN_B+", "6": "IN_B-", "7": "OUT_B", "8": "V+"},
+      "pad_functions": {"1": "OUT", "2": "IN-", "3": "IN+", "4": "V-", "5": "IN_B+", "6": "IN_B-", "7": "OUT_B", "8": "V+"},
+      "pad_ties": {"5": "GND", "6": "{ref}_UB", "7": "{ref}_UB"},
       "polarized": true,
-      "notes": "同 LM358_DIP8 脚位语义；SMD 版本",
+      "notes": "同 LM358_DIP8 的脚位和未用通道端接；SOIC-8",
       "version": 1
     }
   ]

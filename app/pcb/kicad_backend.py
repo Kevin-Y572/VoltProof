@@ -445,6 +445,12 @@ def build_board(k: KiCad, spec: dict, out_pcb: Path, workdir: Path,
         lines.append("place({!r}, {!r}, {!r}, {!r}, {!r}, {!r})".format(
             str(c["lib"]), str(c["footprint"]), str(c["ref"]),
             float(c["x"]), float(c["y"]), pads_map))
+        rot = float(c.get("rot") or 0) % 360
+        if rot:
+            # 与 move_footprints 同一套角度单位（十分之一度）。0° 不写，避免改动现有脚本。
+            lines.append("_fp = [fp for fp in board.GetFootprints() if fp.GetReference()=={!r}][-1]".format(
+                str(c["ref"])))
+            lines.append("_fp.SetOrientation(pcbnew.EANGLE_T(int(round({}*10))))".format(rot))
     for ko in spec.get("keepouts", []) or []:
         lines.append("add_keepout({!r}, {!r}, {!r}, {!r})".format(
             float(ko["x"]), float(ko["y"]), float(ko["w"]), float(ko["h"])))
@@ -499,14 +505,96 @@ def write_project_rules(board_path: Path, rules: dict | None) -> Path:
                    "min_microvia_diameter": via_dia, "min_microvia_drill": via_drill}
     ds["track_widths"] = [track]
     ds["via_dimensions"] = [{"diameter": via_dia, "drill": via_drill}]
+    ds["net_settings"] = _net_settings(rules, track, clear, via_dia, via_drill)
     pro.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return pro
 
 
-def export_dsn(k: KiCad, pcb: Path, dsn: Path, workdir: Path) -> tuple[bool, str]:
+def _netclass_apply_source(rules: dict) -> str:
+    """导出 DSN 前尽力把网络类写进已打开的板。API 对不上就跳过，不中断导出。"""
+    payload = []
+    for item in rules.get("net_classes") or []:
+        name = str(item.get("name") or "")
+        if not _SAFE_NAME.match(name):
+            continue
+        nets = [str(n) for n in item.get("nets") or [] if _SAFE_NAME.match(str(n))]
+        payload.append({
+            "name": name,
+            "nets": nets,
+            "track_mm": float(item.get("track_mm") or 0),
+            "clearance_mm": float(item.get("clearance_mm") or 0),
+        })
+    if not payload:
+        return "print('NETCLASS_SKIPPED', 'none')\n"
+    return (
+        "try:\n"
+        f"    _VP_NC = {payload!r}\n"
+        "    _applied = 0\n"
+        "    _ds = b.GetDesignSettings()\n"
+        "    _ns = getattr(_ds, 'm_NetSettings', None)\n"
+        "    for _c in _VP_NC:\n"
+        "        _klass = None\n"
+        "        if _ns is not None and hasattr(_ns, 'GetNetclass'):\n"
+        "            _klass = _ns.GetNetclass(_c['name'])\n"
+        "        if _klass is not None and hasattr(_klass, 'SetTrackWidth'):\n"
+        "            _klass.SetTrackWidth(int(float(_c['track_mm']) * 1000000))\n"
+        "            _applied += 1\n"
+        "        if _klass is not None and hasattr(_klass, 'SetClearance'):\n"
+        "            _klass.SetClearance(int(float(_c['clearance_mm']) * 1000000))\n"
+        "        if _ns is not None and hasattr(_ns, 'SetNetclassAssignment'):\n"
+        "            for _n in _c['nets']:\n"
+        "                _ns.SetNetclassAssignment(_n, _c['name'])\n"
+        "                _applied += 1\n"
+        "    print('NETCLASS_APPLIED' if _applied else 'NETCLASS_SKIPPED', _applied)\n"
+        "except Exception as _exc:\n"
+        "    print('NETCLASS_SKIPPED', type(_exc).__name__)\n"
+    )
+
+
+def _net_settings(rules: dict, track: float, clear: float, via_dia: float, via_drill: float) -> dict:
+    """KiCad 工程里的网络类。全局最小线宽/净距仍是 design_settings.rules，不在这里放宽。
+
+    类的线宽和净距只允许大于等于制造底线（调用前已校验）。Freerouting 读的是
+    DSN；导出脚本会尝试把同一组数字写进 pcbnew，写不进就记 NETCLASS_SKIPPED，
+    不把类宽假装成已经布出来的铜。
+    """
+    def _klass(name: str, width: float, clearance: float, priority: int) -> dict:
+        return {
+            "name": name,
+            "clearance": clearance,
+            "track_width": width,
+            "via_diameter": via_dia,
+            "via_drill": via_drill,
+            "microvia_diameter": via_dia,
+            "microvia_drill": via_drill,
+            "diff_pair_width": width,
+            "diff_pair_gap": clearance,
+            "diff_pair_via_gap": clearance,
+            "priority": priority,
+        }
+
+    classes = [_klass("Default", track, clear, 2147483647)]
+    patterns = []
+    for item in rules.get("net_classes") or []:
+        name = str(item.get("name") or "")
+        if not _SAFE_NAME.match(name) or name == "Default":
+            continue
+        width = max(track, float(item.get("track_mm") or track))
+        clearance = max(clear, float(item.get("clearance_mm") or clear))
+        classes.append(_klass(name, width, clearance, int(item.get("priority") or 0)))
+        for net in item.get("nets") or []:
+            if _SAFE_NAME.match(str(net)):
+                patterns.append({"pattern": str(net), "netclass": name})
+    return {"classes": classes, "netclass_patterns": patterns, "meta": {"version": 3}}
+
+
+def export_dsn(k: KiCad, pcb: Path, dsn: Path, workdir: Path,
+               rules: dict | None = None) -> tuple[bool, str]:
+    prelude = _netclass_apply_source(rules or {})
     script = (
         "import pcbnew\n"
         f"b = pcbnew.LoadBoard({str(pcb)!r})\n"
+        + prelude +
         f"print('DSN:', pcbnew.ExportSpecctraDSN(b, {str(dsn)!r}))\n")
     ok, out = _run_kicad_python(k, script, workdir)
     if ok and "DSN: True" not in out:

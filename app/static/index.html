@@ -145,9 +145,12 @@
           <span class="hint">×</span>
           <input id="pcbH" type="text" data-i18n-placeholder="pcb.h" placeholder="高mm" style="width:52px;background:#10131b;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:3px 6px">
           <label class="hint" style="cursor:pointer"><input id="pcbHoles" type="checkbox"> <span data-i18n="pcb.holes">M3 安装孔</span></label>
+          <label class="hint" style="cursor:pointer"><input id="pcbAgent" type="checkbox"> <span data-i18n="pcb.agent">实验：允许模型提出布局</span></label>
         </div>
-        <div style="display:flex;gap:8px;margin-top:6px">
+        <div class="hint" data-i18n="pcb.agentHint">模型只提交坐标和有界修改，由合法化器和 Freerouting 执行。失败则退回信号流布局。模型不画铜，板也不是可直接投产的成品。</div>
+        <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
           <button class="btn" id="pcbPreBtn" data-i18n="pcb.pre">预检</button>
+          <button class="btn" id="pcbRealizeBtn" data-i18n="pcb.realize" style="display:none">换成 LM358 候选</button>
           <button class="btn primary" id="pcbRunBtn" data-i18n="pcb.run">② 生成 PCB</button>
           <button class="btn" id="pcbCancelBtn" data-i18n="cancel" style="display:none">取消</button>
         </div>
