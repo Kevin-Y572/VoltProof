@@ -6,7 +6,8 @@ on_stage 回调即可流式转发；取消为【阶段间协作式】——cance
 方案 §6.2 原文即此设计）。
 
 归档结构（§6.1，按本阶段简化）：
-  <archive>/input/   netlist.txt、ports.json、rules.json
+  <archive>/input/   netlist.txt、ports.json、rules_request.json、rules.json
+          /agent/    placement.json，以及失败后的 round-N（提案/校验/证据）
           /routing/  dsn、ses、freerouting.log
           /final/    board.kicad_pcb
           /checks/   connectivity.json、drc.json、mapping_report.json
@@ -15,6 +16,7 @@ on_stage 回调即可流式转发；取消为【阶段间协作式】——cance
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import subprocess
@@ -22,7 +24,8 @@ import time
 from pathlib import Path
 
 from ..circuit_ir import netlist_to_ir
-from . import connectivity, kicad_backend, parts, router_backend, schema, versions
+from . import agent, connectivity, constraints, kicad_backend, parts, router_backend, schema, versions
+from .constraints import ConstraintError
 from .procutil import no_window_kwargs
 
 _STAGE_NAMES = ("mapping", "board", "routing", "import", "check", "fabrication")
@@ -59,7 +62,7 @@ def run_pcb_job(netlist: str, ports: list[str], archive: Path, *,
                 max_passes: int = 10, timeout_s: int = 180,
                 cancel_check=None, on_stage=None, job_id: str | None = None,
                 base_board: Path | None = None, parent_version: str | None = None,
-                moves: dict | None = None) -> dict:
+                moves: dict | None = None, agent_opts: dict | None = None) -> dict:
     """跑一次 PCB 任务。返回结果 dict（同时写 manifest.json 归档）。
 
     ws 提供时：检查通过 → 保存候选版本记录（不自动采用——采用是用户动作）。
@@ -110,9 +113,10 @@ def run_pcb_job(netlist: str, ports: list[str], archive: Path, *,
     (archive / "input" / "netlist.txt").write_text(netlist, encoding="utf-8")
     (archive / "input" / "ports.json").write_text(
         json.dumps(ports, ensure_ascii=False), encoding="utf-8")
-    rules = rules or schema.default_rules()
-    (archive / "input" / "rules.json").write_text(
-        json.dumps(rules, ensure_ascii=False, indent=2), encoding="utf-8")
+    requested_rules = copy.deepcopy(rules or schema.default_rules())
+    (archive / "input" / "rules_request.json").write_text(
+        json.dumps(requested_rules, ensure_ascii=False, indent=2), encoding="utf-8")
+    rules = requested_rules
 
     # 1. 映射（纯离线，先跑——网表自身的阻断问题优先暴露给用户）
     mapped: dict = {}
@@ -131,11 +135,67 @@ def run_pcb_job(netlist: str, ports: list[str], archive: Path, *,
             raise ValueError("映射存在阻断项：" + "；".join(result["blockers"][:3]))
         return f"{len(mapped['spec']['components'])} 个元件映射成功"
 
+    prepared: dict = {"rules": rules}
+
+    @stage("intent", schema.READY)
+    def s_intent():
+        try:
+            prepared["rules"] = constraints.build(ir, mapped["spec"], prepared["rules"])
+        except ConstraintError as exc:
+            result["blockers"] = [e.get("reason", str(e)) for e in exc.issues]
+            (archive / "checks").mkdir(exist_ok=True)
+            (archive / "checks" / "constraint_error.json").write_text(
+                json.dumps({"applied": False, "errors": exc.issues},
+                           ensure_ascii=False, indent=2), encoding="utf-8")
+            raise ValueError("约束校验失败：" + "；".join(result["blockers"][:3])) from exc
+        (archive / "checks").mkdir(exist_ok=True)
+        (archive / "checks" / "constraints.json").write_text(
+            json.dumps(prepared["rules"], ensure_ascii=False, indent=2), encoding="utf-8")
+        return (f"{len(prepared['rules']['net_classes'])} 个网络类，"
+                f"{len(prepared['rules']['groups'])} 个功能组，"
+                f"{len(prepared['rules']['proximity'])} 条近距")
+
+    @stage("place", schema.READY)
+    def s_place():
+        if base_board is not None:
+            prepared["rules"]["placement"] = "manual"
+            return "沿用已有板，不重排封装"
+        record = agent.choose_placement(
+            mapped["spec"], prepared["rules"], agent_opts, archive)
+        result["placement"] = {
+            "source": record["source"],
+            "fallback": record["fallback"],
+            "provider": record["provider"],
+            "prompt_sha256": record["prompt_sha256"],
+        }
+        if not record["ok"]:
+            result["blockers"] = [e.get("reason", str(e)) for e in record["errors"]]
+            (archive / "checks" / "constraint_error.json").write_text(
+                json.dumps({"applied": False, "errors": record["errors"]},
+                           ensure_ascii=False, indent=2), encoding="utf-8")
+            raise ValueError("布局约束无法满足：" + "；".join(result["blockers"][:3]))
+        mapped["spec"] = record["spec"]
+        note = record["source"]
+        if record.get("fallback"):
+            note += f"（回退：{record['fallback']}）"
+        return note
+
     try:
         s_mapping()
     except (Cancelled, Exception):  # noqa: BLE001 —— 明细已入 stages
         _finish(archive, result, netlist, mapped, rules, None, None, t0, ws, None, None)
         return result
+
+    try:
+        s_intent()
+        s_place()
+    except (Cancelled, Exception):  # noqa: BLE001 —— 明细已入 stages
+        _finish(archive, result, netlist, mapped, prepared["rules"], None, None, t0, ws, None, None)
+        return result
+
+    rules = prepared["rules"]
+    (archive / "input" / "rules.json").write_text(
+        json.dumps(rules, ensure_ascii=False, indent=2), encoding="utf-8")
 
     # 2. 工具在场性（缺失时给明确诊断，方案 §5.2 最后一问）。
     # Java 也在这里失败：拖到布线子进程才报，用户只能看到一条启动错误。
@@ -205,7 +265,7 @@ def run_pcb_job(netlist: str, ports: list[str], archive: Path, *,
     def s_routing():
         nonlocal route_result
         (archive / "routing").mkdir(exist_ok=True)
-        ok, out = kicad_backend.export_dsn(kicad, pcb, dsn, archive / "routing")
+        ok, out = kicad_backend.export_dsn(kicad, pcb, dsn, archive / "routing", rules=rules)
         assert ok, out
         rr = router_backend.route(jar, dsn, ses, archive / "routing" / "router",
                                   max_passes=max_passes, timeout_s=timeout_s)
@@ -265,17 +325,57 @@ def run_pcb_job(netlist: str, ports: list[str], archive: Path, *,
         assert any(f.endswith(".gbrjob") for f in files) and any(f.endswith(".drl") for f in files)
         return f"{len(files)} 个制板文件"
 
-    try:
-        s_board()  # mapping 已在上方工具预检前跑过（阻断/取消时已提前 return）
-        s_routing()
-        s_import()
-        s_check()
-        s_fab()
-        result["ok"] = True
-    except Cancelled:
-        pass
-    except Exception:  # noqa: BLE001 —— 阶段装饰器已把明细写进 stages
-        pass
+    enabled = bool((agent_opts or {}).get("enabled")) and base_board is None
+    repairs_left = agent.cap_repairs((agent_opts or {}).get("max_repairs", 1), enabled)
+    round_folder = None
+    attempt = 0
+    while True:
+        attempt += 1
+        result.pop("state_hint_partial", None)
+        try:
+            s_board()
+            s_routing()
+            s_import()
+            s_check()
+            s_fab()
+            result["ok"] = True
+            if round_folder:
+                agent.finish_round(round_folder, {"ok": True, "state": result["state"]})
+            break
+        except Cancelled:
+            if round_folder:
+                agent.finish_round(round_folder, {"ok": False, "state": schema.CANCELLED})
+            break
+        except Exception as exc:  # noqa: BLE001 —— 阶段装饰器已把明细写进 stages
+            if round_folder:
+                agent.finish_round(round_folder, {
+                    "ok": False, "state": result["state"], "error": str(exc)[:300]})
+            if repairs_left <= 0:
+                break
+            evidence = agent.collect_evidence(
+                archive, route_result, drc_result, [str(exc)], rules, mapped["spec"])
+            try:
+                requested = agent.request_repair(evidence, mapped["spec"], rules, agent_opts or {})
+            except Exception as model_exc:  # noqa: BLE001 —— 模型失败就停在本轮证据上
+                result["blockers"] = [f"修复模型不可用：{model_exc}"[:300]]
+                break
+            outcome = agent.apply_repair(
+                mapped["spec"], rules, requested["raw"], archive, attempt, evidence)
+            folder = archive / "agent" / f"round-{attempt}"
+            (folder / "model.json").write_text(json.dumps({
+                "provider": requested["provider"],
+                "prompt_sha256": requested["prompt_sha256"],
+                "route_reuse": agent.ROUTE_REUSE,
+            }, ensure_ascii=False, indent=2), encoding="utf-8")
+            if not outcome["ok"]:
+                result["blockers"] = [e.get("reason", str(e)) for e in outcome["errors"]]
+                break
+            mapped["spec"] = outcome["spec"]
+            rules = outcome["rules"]
+            (archive / "input" / "rules.json").write_text(
+                json.dumps(rules, ensure_ascii=False, indent=2), encoding="utf-8")
+            round_folder = outcome.get("folder")
+            repairs_left -= 1
     if result.get("state_hint_partial") and result["state"] == schema.FAILED:
         result["state"] = schema.PARTIAL
     _finish(archive, result, netlist, mapped, rules, pcb, drc_result, t0, ws, kicad, jar,

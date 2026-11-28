@@ -82,12 +82,35 @@ def _catalog_schema() -> str:
 
 
 def default_rules() -> dict:
-    """默认规则 = KiCad 默认布线宽度（track 0.2 / 净距 0.2 / 过孔 0.6·0.3）——
-    与 DSN 导出的默认宽度一致，标准链全绿；自定义更严规则会真实生效
-    （0.25mm 走线在 1.0mm 最小线宽下被 DRC 报错，实测）。"""
-    return {"schema": SCHEMA_VERSION, "layers": 2, "track_mm": 0.2,
-            "clearance_mm": 0.2, "via_drill_mm": 0.3, "via_diameter_mm": 0.6,
-            "zone_net": "GND"}
+    """默认规则 = 制造底线 + 尚未提取的布局约束槽位。
+
+    制造底线与 KiCad 默认布线宽度一致（track 0.2 / 净距 0.2 / 过孔 0.6·0.3），
+    也是 DSN 导出的默认宽度。自定义更严的底线会进入 DRC（0.25mm 走线在
+    1.0mm 最小线宽下被报错，实测）。底线只许加严，布局修复不得放宽。
+
+    groups / proximity / locked / edge / net_classes / keepouts /
+    keepout_intents / isolation / rotations 由 constraints.build 按已验证
+    电路填实后再写入 rules.json。空表表示还没提取，不是把硬约束丢掉。
+    """
+    return {
+        "schema": SCHEMA_VERSION,
+        "layers": 2,
+        "track_mm": 0.2,
+        "clearance_mm": 0.2,
+        "via_drill_mm": 0.3,
+        "via_diameter_mm": 0.6,
+        "zone_net": "GND",
+        "groups": [],
+        "proximity": [],
+        "locked": [],
+        "edge": [],
+        "net_classes": [],
+        "keepouts": [],
+        "keepout_intents": [],
+        "isolation": [],
+        "rotations": {"*": [0, 90, 180, 270]},
+        "placement": "signal_flow",
+    }
 
 
 def rules_hash(rules: dict) -> str:

@@ -25,7 +25,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from .. import i18n
 from ..circuit_ir import netlist_to_ir
 from ..project import Conflict
-from . import connectivity, jobs, kicad_backend, parts, router_backend, schema, versions
+from . import connectivity, constraints, jobs, kicad_backend, opamp_realize, parts, router_backend, schema, versions
 
 router = APIRouter(prefix="/api/pcb")
 
@@ -110,19 +110,38 @@ def preflight(req: dict):
     caps = capabilities()
     mapped = parts.map_netlist(netlist, ports, options=req.get("options"))
     stale = versions.is_stale(_active_ws(), netlist) if netlist else {"stale": False}
+    constraint_summary = None
+    if mapped["ok"]:
+        try:
+            built = constraints.build(ir, mapped["spec"], schema.default_rules())
+            constraint_summary = {
+                "groups": len(built["groups"]),
+                "proximity": len(built["proximity"]),
+                "net_classes": [c["name"] for c in built["net_classes"]],
+                "edge": len(built["edge"]),
+                "locked": len(built["locked"]),
+                "keepout_intents": len(built["keepout_intents"]),
+            }
+        except constraints.ConstraintError as exc:
+            mapped["report"]["blocked"] = list(mapped["report"].get("blocked") or []) + exc.issues
     return {
         "netlist_sha": schema.electrical_hash(netlist) if netlist else None,
         "elements": [{"ref": e["ref"], "kind": e["kind"], "role": e["role"]}
                      for e in ir["elements"]],
         "nets": ir["nets"],
         "port_candidates": ir["port_candidates"],
-        "blockers": mapped["report"]["blocked"] if not mapped["ok"] else [],
+        "blockers": mapped["report"]["blocked"] if (
+            not mapped["ok"] or mapped["report"].get("blocked")) else [],
         "warnings": mapped["report"].get("warnings", []),
         "tools_ready": caps["available"],
         "tool_hints": [h for sec in ("kicad", "freerouting", "java")
                        if not caps[sec]["found"] for h in [caps[sec]["hint"]]],
         "current_board_stale": stale["stale"],
         "current_board_reason": stale.get("reason"),
+        "constraints": constraint_summary,
+        "opamp_realize": opamp_realize.assess(netlist) if netlist.strip() else {
+            "needed": False, "ready": False, "blockers": []},
+        "experimental": True,
     }
 
 
@@ -136,6 +155,26 @@ def _prune_jobs_locked() -> None:
     finished = [jid for jid, st in _jobs.items() if st.get("result") is not None]
     for jid in finished[:len(_jobs) - _keep]:
         _jobs.pop(jid, None)
+
+
+@router.post("/realize-opamp")
+def realize_opamp(req: dict):
+    """理想运放换成 LM358 候选。只新增版本，不改当前采用的电路。"""
+    netlist = _project_netlist(req)
+    if isinstance(netlist, JSONResponse):
+        return netlist
+    if not str(netlist).strip():
+        return JSONResponse(status_code=400, content={"error": i18n.t("api.pcb_netlist")})
+    built = opamp_realize.realize_netlist(str(netlist))
+    if not built["ok"]:
+        return {"ok": False, "applied": False, "version_id": None,
+                "blockers": built["blockers"], "changes": []}
+    requirements = None
+    if req.get("use_project"):
+        requirements = _active_ws().load_project().get("requirements") or []
+    return opamp_realize.reverify_candidate(
+        _active_ws(), built["netlist"], title="LM358 candidate",
+        requirements=requirements, changes=built["changes"])
 
 
 @router.post("/jobs")
@@ -153,6 +192,9 @@ def create_job(req: dict):
     ports = [str(p)[:40] for p in ports]
     max_passes = int(req.get("max_passes") or 10)
     timeout_s = int(req.get("timeout_s") or 180)
+    agent_opts = None
+    if req.get("agent"):
+        agent_opts = {"enabled": True, "max_repairs": req.get("max_repairs", 1)}
 
     job_id = schema.new_job_id()
     cancel_event = threading.Event()
@@ -167,7 +209,7 @@ def create_job(req: dict):
         try:
             result = jobs.run_pcb_job(
                 netlist, ports, archive, ws=ws, job_id=job_id,
-                options=req.get("options"),
+                options=req.get("options"), agent_opts=agent_opts,
                 max_passes=max_passes, timeout_s=timeout_s,
                 cancel_check=cancel_event.is_set,
                 on_stage=lambda name, state, detail:

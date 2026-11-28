@@ -72,11 +72,41 @@ def resolve_entry(kind: str, value: str, mount: str = "tht") -> tuple[dict | Non
     return None, i18n.t("api.block.value", kind=kind, value=repr(value))
 
 
-def _pads_for(entry: dict, nets: list[str]) -> list[str]:
-    """按 焊盘号→引脚功能→SPICE 位序 组装 pads（焊盘顺序的净表）。"""
+def subckt_is_catalog_part(model: str, n_pins: int) -> bool:
+    """子电路名和脚数同时命中审校条目时，才允许把 X 当成可上板器件。"""
+    text = str(model or "").lower()
+    if not text or n_pins < 1:
+        return False
+    for entry in load_catalog()["entries"]:
+        if entry["match"].get("kind") != "X":
+            continue
+        keys = [k.lower() for k in entry["match"].get("model_contains", [])]
+        if keys and any(k in text for k in keys) and len(entry["spice_pin_order"]) == n_pins:
+            return True
+    return False
+
+
+def tie_net(entry: dict, pad_no: str, ref: str) -> str | None:
+    """焊盘固定端接（未用通道等）。没有端接则返回 None。"""
+    ties = entry.get("pad_ties") or {}
+    raw = ties.get(str(pad_no))
+    if raw is None:
+        return None
+    return str(raw).replace("{ref}", ref)
+
+
+def _pads_for(entry: dict, nets: list[str], ref: str) -> list[str]:
+    """按 焊盘号→引脚功能→SPICE 位序 组装 pads（焊盘顺序的净表）。
+
+    pad_ties 里的焊盘不占用 SPICE 脚序，直接落到声明的网络（可含 {ref}）。
+    """
     order = entry["spice_pin_order"]
     pads: list[str] = []
     for pad in sorted(entry["pad_functions"], key=int):
+        tied = tie_net(entry, pad, ref)
+        if tied is not None:
+            pads.append(tied)
+            continue
         func = entry["pad_functions"][pad]
         pads.append(nets[order.index(func)])
     return pads
@@ -115,7 +145,7 @@ def map_ir(ir: dict, ports: list[str], options: dict | None = None) -> dict:
             blockers.append({"ref": el["ref"], "reason":
                              i18n.t("api.block.pins", nets=len(el["nets"]), part=el["part"], pins=len(entry["spice_pin_order"]))})
             continue
-        pads = _pads_for(entry, el["nets"])
+        pads = _pads_for(entry, el["nets"], el["ref"])
         components.append({"ref": el["ref"], "part": entry["id"],
                            "lib": entry["footprint"]["lib"],
                            "footprint": entry["footprint"]["name"], "pads": pads})
@@ -131,6 +161,8 @@ def map_ir(ir: dict, ports: list[str], options: dict | None = None) -> dict:
         if any(k in str(el["value"]).lower()
                for k in ("qnpn", "qpnp", "dmod")):
             item["notes"].append(i18n.t("api.block.teach"))
+        if entry.get("pad_ties"):
+            item["notes"].append(i18n.t("api.block.ties"))
         report["mapped"].append(item)
 
     if blockers:
@@ -187,8 +219,9 @@ def map_ir(ir: dict, ports: list[str], options: dict | None = None) -> dict:
     if blockers:
         report["blocked"] = blockers
         return {"ok": False, "spec": None, "report": report}
+    pad_nets = {n for c in components for n in (c.get("pads") or []) if n}
     spec = {"name": "board", "size_mm": [w, h],
-            "nets": sorted(set(ir["nets"]) | declared | {gnd}),
+            "nets": sorted(set(ir["nets"]) | declared | {gnd} | pad_nets),
             "components": components,
             "keepouts": keepouts,
             "zones": [{"net": gnd, "layer": "B.Cu",

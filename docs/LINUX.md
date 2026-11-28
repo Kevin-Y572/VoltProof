@@ -122,6 +122,26 @@ export VOLTPROOF_FREEROUTING=/opt/freerouting/freerouting-2.1.0.jar
 python3 scripts/pcb_smoke.py
 ```
 
-在界面里：打开工作台，加载示例并仿真，进入 PCB 页。KiCad、Freerouting、Java 三项都应为就绪。预检通过后「生成 PCB」才可点。生成结果应走过 mapping、board、routing、import、check、fabrication，并得到 Gerber、钻孔和 BOM。
+在界面里：打开工作台，加载示例并仿真，进入 PCB 页。KiCad、Freerouting、Java 三项都应为就绪。预检通过后「生成 PCB」才可点。生成结果应走过 mapping、约束、布局、造板、布线、回导、检查、制板文件，并得到 Gerber、钻孔和 BOM。
+
+## 4. 布局代理（实验，第一阶段）
+
+PCB 仍然是实验功能。布局代理不会把板做成可以投产的成品，也不代替 Freerouting 画铜。
+
+已验证的电路会先抽出一份约束（功能组、去耦近距、连接器靠边、机械孔锁定、电源/地网络类、能推断时的禁布、允许角度）。这份对象写进任务的 `rules.json`，不合法就停止，不会悄悄丢掉硬约束。
+
+打开「允许模型提出布局」后，模型只能提交封装坐标和角度。合法化器检查重叠、出板和间距（基线是已经实测过的庭院节距）。模型不可用、提案不合法、或没勾选这一项时，退回原来的信号流布局。不走模型时，同一份输入的布局仍然可复现。走模型时，任务档案里有供应商、提示词哈希、原始提案和合法化结果。
+
+布线或 DRC 失败后，模型只能从菜单里改：挪动或旋转已有位号、放大板框、加严网络类、增加禁布区。不能放宽线宽、净距或过孔来换一块“干净”的板，也不能提交走线坐标或 `.kicad_pcb`。每一轮的提案、校验和结果都留在 `agent/round-N/`。修复会重新导出 DSN 再跑 Freerouting；没锁定的旧走线不会保留。
+
+理想运放不会直接上板。PCB 页的「换成 LM358 候选」会辨认同相/反相/输出，补上正负电源和去耦，仿真通过后新增一个项目候选，不改当前采用的版本。采用之后才能预检和生成 PCB。LM358 子电路是行为级替身，不是厂家宏模型；双运放里没用的那一路只在板上端接。电源或脚序补不齐时会给出原因，不会产出一块不完整的板。
+
+不装 KiCad 也能检查约束和合法化：
+
+```bash
+python3 scripts/pcb_smoke.py --agent-offline
+```
+
+装齐工具后的整板冒烟仍然是 `python3 scripts/pcb_smoke.py`。代理本身不需要在这条命令里调用模型。
 
 Windows 上同一条链仍然可用：KiCad 10.x 的 `bin/kicad-cli.exe` 与 `bin/python.exe`，Java 21+，以及同一个 `freerouting-2.1.0.jar`（用 `VOLTPROOF_FREEROUTING` 指向它）。

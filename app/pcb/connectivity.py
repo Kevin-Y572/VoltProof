@@ -31,6 +31,11 @@ def _pad_order(entry: dict) -> list[str]:
     return sorted(entry["pad_functions"], key=int)
 
 
+def _tie_net(entry: dict, pad_no: str, ref: str) -> str | None:
+    from .parts import tie_net
+    return tie_net(entry, pad_no, ref)
+
+
 def expected_pins(ir: dict, ports: list[str]) -> dict[tuple[str, int], str]:
     """期望侧：{(位号, SPICE 引脚号 1..n): 网络}。端子按生成契约
     （每口一个 1x2 排针：pad1=信号 pad2=GND）计入。"""
@@ -73,6 +78,13 @@ def spec_pins(spec: dict, j_refs: list[str] | None = None) -> dict[tuple[str, in
         if len(pads) != len(pads_sorted):
             raise ValueError(f"{comp['ref']} 焊盘数 {len(pads)} ≠ 条目 {len(pads_sorted)}")
         for pad_no, func, net in zip(pads_sorted, (entry["pad_functions"][p] for p in pads_sorted), pads):
+            tied = _tie_net(entry, pad_no, comp["ref"])
+            if tied is not None:
+                if net != tied:
+                    raise ValueError(f"{comp['ref']} 焊盘{pad_no} 应端接到 {tied}，规格是 {net}")
+                continue
+            if func not in order:
+                raise ValueError(f"{comp['ref']} 焊盘{pad_no} 的功能 {func} 不在 SPICE 位序里")
             out[(comp["ref"], order.index(func) + 1)] = net
     # 端子对位：spec 里端子顺序 = ports 顺序（生成契约）；显式 j_refs 优先
     names = j_refs if j_refs is not None else [c["ref"] for c in connectors]
@@ -156,12 +168,20 @@ def board_partition(preview: dict, ir: dict, ports: list[str],
             return {"ok": False, "issues": issues, "per_net": {}}
         entry = _catalog_entry(part_id)
         order = entry["spice_pin_order"]
+        tie_issues = []
         for pad_no, net in pads_by_no.items():
+            tied = _tie_net(entry, pad_no, ref)
+            if tied is not None:
+                if net != tied:
+                    tie_issues.append(f"{ref} 焊盘{pad_no} 应端接到 {tied}，板文件是 {net}")
+                continue
             func = entry["pad_functions"].get(pad_no)
             if func is None or func not in order:
                 return {"ok": False, "issues": [
                     f"{ref} 焊盘{pad_no} 不在器件库引脚表（{entry['id']}）"], "per_net": {}}
             actual[(ref, order.index(func) + 1)] = net
+        if tie_issues:
+            return {"ok": False, "issues": tie_issues, "per_net": {}}
     # 端子：pad1=信号 pad2=GND
     names = j_refs or sorted(conn_pads)
     for idx, p in enumerate(ports, start=1):
@@ -235,12 +255,20 @@ def board_partition_with_map(preview: dict, ir: dict, ports: list[str],
                     "per_net": {}}
         entry = _catalog_entry(part_id)
         order = entry["spice_pin_order"]
+        tie_issues = []
         for pad_no, net in pads_by_no.items():
+            tied = _tie_net(entry, pad_no, ref)
+            if tied is not None:
+                if net != tied:
+                    tie_issues.append(f"{ref} 焊盘{pad_no} 应端接到 {tied}，板文件是 {net}")
+                continue
             func = entry["pad_functions"].get(pad_no)
             if func is None or func not in order:
                 return {"ok": False, "issues": [
                     f"{ref} 焊盘{pad_no} 不在器件库引脚表（{entry['id']}）"], "per_net": {}}
             actual[(ref, order.index(func) + 1)] = net
+        if tie_issues:
+            return {"ok": False, "issues": tie_issues, "per_net": {}}
     expected = expected_pins(ir, ports)
     for idx, p in enumerate(ports, start=1):
         ref = j_refs[idx - 1] if idx - 1 < len(j_refs) else f"J{idx}"

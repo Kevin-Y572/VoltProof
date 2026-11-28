@@ -107,6 +107,8 @@ If you installed with pip, you can use `"command": "voltproof-mcp"`.
 
 The workbench, canvas, comparison page, and ngspice simulation do not need this. With the tools below installed, the full board-export chain runs on Linux and on Windows: preflight, mapping, KiCad board, Freerouting, SES import and zone fill, DRC and connectivity, then Gerber, drill, and BOM. If a tool is missing, **Generate PCB** stays disabled and the job stops before routing, with a setup hint.
 
+This is experimental. An optional layout agent can propose footprint positions from the verified circuit, and a later bounded edit if routing or DRC fails. A deterministic legalizer checks every proposal. Freerouting still draws the copper. The model does not emit tracks or a `.kicad_pcb`, and a finished job is not a fab-ready board. If the model is off, unavailable, or rejected, the existing signal-flow placement is used. Ideal op-amps are not placed as-is: **Make an LM358 candidate** adds supply pins, re-simulates, and stores a new project candidate without changing the adopted circuit. Details and the offline check (`scripts/pcb_smoke.py --agent-offline`) are in [docs/LINUX.md](docs/LINUX.md).
+
 | Tool | Required | How to install |
 | --- | --- | --- |
 | KiCad | 10.x. The current stable line is 10.0.8 from `ppa:kicad/kicad-10.0-releases`. | Linux: the `kicad` package plus `kicad-footprints` (`/usr/bin/kicad-cli`, pcbnew on `/usr/bin/python3`, footprints in `/usr/share/kicad/footprints`). Windows: the installer, or `VOLTPROOF_KICAD` set to the root that contains `bin/kicad-cli.exe` and `bin/python.exe`. |

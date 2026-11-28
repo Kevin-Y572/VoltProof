@@ -8,6 +8,11 @@
   const tt = (k, v) => VPI18n.t(k, v);
   const trs = s => VPI18n.tr(s);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  function stageLabel(name) {
+    const key = 'pcb.stage.' + (name || '');
+    const label = tt(key);
+    return label === key ? trs(name || '') : label;
+  }
   const $ = (id) => document.getElementById(id);
   const svg = $('pcbSvg');
   const NS = 'http://www.w3.org/2000/svg';
@@ -86,7 +91,14 @@
       renderPorts();
       if (pre.port_candidates.length)
         html += '<div class="hint" style="margin-top:6px">' + esc(tt('pcb.portsHint')) + '</div>';
+      if (pre.constraints) {
+        const cs = pre.constraints;
+        html += '<div class="hint" style="margin-top:6px">' + esc(tt('pcb.constraints', {
+          groups: cs.groups, prox: cs.proximity, classes: (cs.net_classes || []).join(', ') || '—'})) + '</div>';
+      }
       out.innerHTML = html;
+      const realize = $('pcbRealizeBtn');
+      if (realize) realize.style.display = pre.opamp_realize && pre.opamp_realize.needed ? '' : 'none';
       $('pcbRunBtn').disabled = pre.blockers.length > 0 || pre.tools_ready !== true;
     } catch (e) {
       out.innerHTML = '<span style="color:var(--warn)">' + e.message + '</span>';
@@ -124,7 +136,7 @@
       stages.push(ev);
       $('pcbJobOut').innerHTML = stages.map(s =>
         `<div class="pcbstage"><span class="${s.ok === true ? 'ok' : s.ok === false ? 'no' : ''}">` +
-        `${s.ok === true ? '✓' : s.ok === false ? '✗' : '…'}</span><span>${esc(trs(s.stage || s.type || ''))}${s.detail ? '：' + esc(trs(s.detail)) : ''}</span></div>`
+        `${s.ok === true ? '✓' : s.ok === false ? '✗' : '…'}</span><span>${esc(stageLabel(s.stage || s.type || ''))}${s.detail ? '：' + esc(trs(s.detail)) : ''}</span></div>`
       ).join('');
     };
     const escJob = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -188,8 +200,10 @@
     $('pcbRunBtn').disabled = true;
     out.innerHTML = '<span class="hint">' + esc(tt('pcb.submitted')) + '</span>';
     try {
-      const j = await api('/api/pcb/jobs', { use_project: true, ports: [...selectedPorts],
-                                             options: boardOptions(), timeout_s: 180 });
+      const body = { use_project: true, ports: [...selectedPorts],
+                     options: boardOptions(), timeout_s: 180 };
+      if ($('pcbAgent') && $('pcbAgent').checked) body.agent = true;
+      const j = await api('/api/pcb/jobs', body);
       watchJob(j.job_id, (st) => {
         $('pcbRunBtn').disabled = false;
         if (st.ok) {
@@ -457,7 +471,7 @@
       const res = await api(`/api/pcb/versions/${view.vid}/placement`, { moves: pendingMoves }, 'PUT');
       const rows = (res.stages || []).map(s =>
         `<div class="pcbstage"><span class="${s.ok ? 'ok' : 'no'}">${s.ok ? '✓' : '✗'}</span>` +
-        `<span>${esc(trs(s.stage))}${s.detail ? '：' + esc(trs(s.detail)) : ''}</span></div>`).join('') +
+        `<span>${esc(stageLabel(s.stage))}${s.detail ? '：' + esc(trs(s.detail)) : ''}</span></div>`).join('') +
         (res.blockers || []).map(b => `<div class="pcbstage"><span class="no">✗</span><span>${esc(trs(b))}</span></div>`).join('');
       out.innerHTML = rows + `<div class="hint">${esc(tt('pcb.stateLine', {state: res.state, extra: res.elapsed_s != null ? '，' + res.elapsed_s + 's' : ''}))}</div>`;
       if (res.ok) {
@@ -475,7 +489,34 @@
 
   // —— 绑定 ——
   $('pcbPreBtn').addEventListener('click', doPreflight);
+  $('pcbRealizeBtn').addEventListener('click', realizeOpamp);
   $('pcbRunBtn').addEventListener('click', runJob);
+
+  async function realizeOpamp() {
+    const out = $('pcbPreOut');
+    out.innerHTML = '<span class="hint">' + esc(tt('pcb.realizeRunning')) + '</span>';
+    try {
+      const res = await api('/api/pcb/realize-opamp', { use_project: true });
+      if (!res.ok) {
+        const msg = (res.blockers || []).map(b => (b.ref ? b.ref + '：' : '') + (b.reason || '')).join('；');
+        out.innerHTML = '<span style="color:var(--warn)">' + esc(tt('pcb.realizeFail', {msg: msg || res.error || ''})) + '</span>';
+        return;
+      }
+      out.innerHTML = '<div class="hint">' + esc(tt('pcb.realizeOk', {id: (res.version_id || '').slice(0, 8)})) + '</div>' +
+        '<div style="margin-top:6px"><button class="btn" id="pcbAdoptCandidate">' + esc(tt('pcb.adoptCandidate')) + '</button></div>';
+      $('pcbAdoptCandidate').addEventListener('click', async () => {
+        try {
+          await api('/api/project/apply', { version_id: res.version_id, expected_revision: res.base_revision });
+          portsTouched = false;
+          await doPreflight();
+        } catch (e) {
+          out.insertAdjacentHTML('beforeend', '<div style="color:var(--warn)">' + esc(e.message) + '</div>');
+        }
+      });
+    } catch (e) {
+      out.innerHTML = '<span style="color:var(--warn)">' + esc(e.message) + '</span>';
+    }
+  }
   $('pcbRunBtn').disabled = true; // 先预检
   $('pcbRerouteBtn').addEventListener('click', rerouteWithMoves);
   $('pcbAdjustResetBtn').addEventListener('click', () => {

@@ -73,9 +73,48 @@ def sha256(path: Path) -> str:
     return h.hexdigest()[:16]
 
 
+def agent_offline() -> int:
+    """不需要 KiCad / Freerouting：约束提取 + 合法化，归档到 pcb/runs。
+
+    这是布局代理的离线钩子。它不调用模型，也不声称铜已经布好。
+    """
+    from app.pcb import constraints, legalizer
+    from app.circuit_ir import netlist_to_ir
+
+    run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+    run_dir = REPO / "pcb" / "runs" / ("agent-offline-" + run_id)
+    run_dir.mkdir(parents=True)
+    ir = netlist_to_ir(RC_NETLIST)
+    mapped = parts.map_netlist(RC_NETLIST, RC_PORTS)
+    if not mapped["ok"]:
+        print("[FAIL] 映射失败", mapped["report"]["blocked"])
+        return 1
+    rules = constraints.build(ir, mapped["spec"], None)
+    placed = legalizer.legalize(mapped["spec"], rules)
+    if not placed["ok"]:
+        print("[FAIL] 合法化失败", placed["errors"])
+        return 1
+    (run_dir / "rules.json").write_text(
+        json.dumps(rules, ensure_ascii=False, indent=2), encoding="utf-8")
+    (run_dir / "placement.json").write_text(json.dumps({
+        "source": "signal_flow",
+        "board_mm": placed["spec"]["size_mm"],
+        "repairs": placed["repairs"],
+        "components": [
+            {"ref": c["ref"], "x": c["x"], "y": c["y"], "rot": c.get("rot", 0)}
+            for c in placed["spec"]["components"]
+        ],
+        "note": "离线钩子：没有调用模型，也没有调用 Freerouting。",
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[OK] agent-offline {run_dir}")
+    return 0
+
+
 def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if "--agent-offline" in sys.argv:
+        return agent_offline()
     kicad = kicad_backend.find_kicad()
     fr = router_backend.find_freerouting()
     missing = []
